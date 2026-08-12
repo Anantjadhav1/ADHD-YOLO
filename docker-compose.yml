@@ -1,0 +1,21 @@
+# Local dev environment now; same containers deploy to EC2 in Phase 5 —
+# only the compose/deploy target changes, not the images themselves.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./data_pipeline:/app/data_pipeline
+      - ./models:/app/models
+    environment:
+      - ENV=local
+
+# Redis/Celery (mentioned in the original blueprint for real-time task
+# scheduling) are intentionally not added yet. Add them in Phase 5 if the
+# dashboard actually needs background job processing — don't stand up
+# infrastructure before there's a concrete reason to use it.

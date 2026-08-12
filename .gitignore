@@ -1,0 +1,18 @@
+# Data & large model weights — never commit these
+data/
+*.edf
+*.mat
+models/*.pt
+models/*.pth
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Env
+.env
+
+# OS
+.DS_Store

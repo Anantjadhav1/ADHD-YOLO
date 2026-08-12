@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -f backend/Dockerfile -t adhd-yolo-backend .
+      # TODO once tests exist: add a test step here (pytest for data_pipeline,
+      # basic endpoint tests for backend). Don't add empty test stubs just to
+      # have a green checkmark — a build-only CI is honest; a fake-passing
+      # test suite is worse than no CI.

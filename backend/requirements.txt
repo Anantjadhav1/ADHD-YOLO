@@ -1,0 +1,22 @@
+# Signal processing / data pipeline
+mne==1.7.1
+numpy==1.26.4
+scipy==1.13.1
+PyWavelets==1.6.0
+pandas==2.2.2
+matplotlib==3.9.0
+scikit-learn==1.5.0
+
+# ML
+torch==2.3.1
+ultralytics==8.2.31
+xgboost==2.0.3
+
+# Backend API
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+
+# Cloud (Phase 5)
+boto3==1.34.131
+python-dotenv==1.0.1
