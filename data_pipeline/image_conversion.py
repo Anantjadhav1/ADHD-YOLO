@@ -118,12 +118,20 @@ def generate_topomap_image(epoch_data: np.ndarray, info: mne.Info) -> np.ndarray
 
 
 def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
-                               task: str, output_dir: str, max_epochs: int | None = None):
+                               task: str, split: str, output_dir: str,
+                               max_epochs: int | None = None):
     """
     Generate both representations for epochs from one subject/task, save to
-    disk in the class-folder layout yolov8n-cls expects.
+    disk in the class-folder layout yolov8n-cls expects:
+        output_dir/<representation>/<split>/<class>/<filename>.png
 
     label: "ADHD" or "Control" — becomes the class folder name.
+    split: "test", "fold_0".."fold_4" (or whatever data_pipeline/subject_split.py
+        assigned this subject) — becomes a folder level so every image on disk
+        traces back to the manifest that produced it. Get this via
+        subject_split.get_split_for_subject(manifest, subject_id) — see
+        process_subject_from_manifest() below — never hand-assign it here,
+        or you risk the exact subject-leakage bug subject_split.py exists to prevent.
     max_epochs: cap for quick testing; None processes all epochs.
     """
     ch_names = epochs.ch_names
@@ -133,18 +141,51 @@ def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
     n = len(data) if max_epochs is None else min(max_epochs, len(data))
 
     for rep_name in ["scalogram", "topomap"]:
-        out_dir = os.path.join(output_dir, rep_name, label)
+        out_dir = os.path.join(output_dir, rep_name, split, label)
         os.makedirs(out_dir, exist_ok=True)
 
     for i in range(n):
         epoch = data[i]
 
         scal_img = generate_scalogram_image(epoch, ch_names, sfreq)
-        scal_path = os.path.join(output_dir, "scalogram", label, f"{subject_id}_{task}_{i:04d}.png")
+        scal_path = os.path.join(output_dir, "scalogram", split, label, f"{subject_id}_{task}_{i:04d}.png")
         Image.fromarray(scal_img).save(scal_path)
 
         topo_img = generate_topomap_image(epoch, epochs.info)
-        topo_path = os.path.join(output_dir, "topomap", label, f"{subject_id}_{task}_{i:04d}.png")
+        topo_path = os.path.join(output_dir, "topomap", split, label, f"{subject_id}_{task}_{i:04d}.png")
         Image.fromarray(topo_img).save(topo_path)
 
     return n
+
+
+def process_subject_from_manifest(epochs_by_task: dict, subject_id: str,
+                                    manifest, output_dir: str,
+                                    max_epochs: int | None = None) -> dict:
+    """
+    Convenience wrapper that actually enforces the "split must happen at the
+    subject level before this runs" rule from the module docstring, instead
+    of just documenting it.
+
+    epochs_by_task: e.g. {"EC": ec_epochs, "EO": eo_epochs, "VCPT": vcpt_epochs}
+        for ONE subject, as returned by preprocessing.preprocess_subject().
+    manifest: the DataFrame from subject_split.load_manifest() — split and
+        label are looked up from here, never passed by hand, so there's no
+        way for a typo to put a subject's images in the wrong split folder.
+
+    Returns {task: n_epochs_processed}.
+    """
+    row = manifest.loc[manifest["subject_id"] == subject_id]
+    if row.empty:
+        raise KeyError(
+            f"subject_id {subject_id!r} not found in the split manifest. "
+            "Run data_pipeline/subject_split.py first and pass its output here."
+        )
+    split = row.iloc[0]["split"]
+    label = row.iloc[0]["group"]
+
+    counts = {}
+    for task, epochs in epochs_by_task.items():
+        counts[task] = process_epochs_to_images(
+            epochs, subject_id, label, task, split, output_dir, max_epochs=max_epochs,
+        )
+    return counts
