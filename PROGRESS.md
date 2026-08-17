@@ -13,8 +13,10 @@ Update this at the end of every working session — a few lines is enough. This 
 
 ---
 
+---
+
 ### 2026-08-12
-- Project scoped and PROJECT.md written: classification-only + Grad-CAM (no bounding-box detection), subject-wise CV, transfer learning plan, biomarker fusion layer, PRISMA lit review plan.
+- Project scoped and PROJECT.md written: classification-only + Grad-CAM (no bounding-box detection), subject-wise CV, transfer learning plan, biomarker fusion layer.
 - Decisions locked: local dev with Docker from day one, classification over detection.
 - Repo skeleton created (this commit).
 - **Next:** get raw dataset from IEEE DataPort / your copy, confirm file format (.edf/.mat/.csv), start `data_pipeline/preprocessing.py` on a handful of subjects.
@@ -46,3 +48,11 @@ Update this at the end of every working session — a few lines is enough. This 
 - Tested against real synthetic `.edf` files on disk (not just in-memory objects) covering: a clean subject with a VCPT file, a clean subject without one, a genuinely ambiguous subject (alpha_ratio ≈ 1.01, confirmed flagged and skipped), an unknown subject_id (confirmed logged as failed, batch continued), and the `--include-ambiguous` override (confirmed it forces processing when asked). Verified output images land under the correct `<representation>/<split>/<label>/` path.
 - **Gotcha found and documented:** `subject_split.py` and `build_dataset.py` both do package-relative imports (`from data_pipeline import ...`), so they must be run as `python3 -m data_pipeline.<script>` from the repo root — `python3 data_pipeline/<script>.py` breaks with `ModuleNotFoundError: No module named 'data_pipeline'` as soon as they import each other. Worth remembering before running this on the real 103-subject batch.
 - **Next:** once the real dataset is available, run `subject_split.py` for the real manifest, then `build_dataset.py` on all 103 subjects. Review anyone flagged `skipped_ambiguous` manually before deciding whether to re-run them with `--include-ambiguous`.
+
+### 2026-08-17
+- Verified the uploaded repo state end-to-end: ran `subject_split.py` and `build_dataset.py` for real against all 5 sample subjects (not synthetic) — 5/5 processed clean, correct fold/class folder structure, VCPT-less subjects handled correctly.
+- Built `training/train_yolo_cls.py` — subject-wise CV training driver for `yolov8n-cls`. Key design point: images are per-epoch but 75.8%/84.5% are per-subject accuracy, so evaluation aggregates epoch-level predictions back to one prediction per subject (mean probability) before computing metrics — implemented in `aggregate_to_subject_level()`, not left as a manual step.
+- Found and fixed a real bug via testing, not code review: the fold-assembly step prefixed symlinked filenames with the fold name for traceability, which broke the subject-ID parser and made the leakage-check flag every subject as leaking (a false positive that would have blocked all training). Fixed by dropping the unnecessary prefix — filenames are already unique across folds since each subject belongs to exactly one fold.
+- Verified the leakage check works both ways: confirmed it passes clean on a correct fold assembly, and confirmed it correctly catches a deliberately-injected real leak (same subject's file symlinked into both train and val).
+- Ran one real (if statistically meaningless — 1 epoch, ~10 images, one fold with a single subject) end-to-end training pass against real generated images: confirmed the full chain (YOLO pretrained weights load → train → predict → aggregate → metrics → CSV) runs without crashing. Fixed one cosmetic bug (Ultralytics nesting output under its own default `runs/classify/` instead of the given path) by resolving to an absolute path.
+- **Next:** once the full 103-subject dataset and a GPU-backed machine are available, run `subject_split.py` for the real manifest (5-fold default), `build_dataset.py` on all subjects, then `train_yolo_cls.py` for a real Phase 2 baseline result — this is the make-or-break checkpoint per PROJECT.md.

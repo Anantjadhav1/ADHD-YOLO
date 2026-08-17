@@ -27,40 +27,43 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | 🟡 In progress — see below |
-| 2 — Baseline model + fusion (the make-or-break checkpoint) | ⬜ Not started |
+| 1 — Data pipeline | ✅ Built and verified against real subjects |
+| 2 — Baseline model + fusion (the make-or-break checkpoint) | 🟡 Training driver built and smoke-tested; real run pending full dataset + GPU |
 | 3 — Grad-CAM + clinical-plausibility check | ⬜ Not started |
-| 4 — Literature review (PRISMA) + paper writing | ⬜ Not started |
+| 4 — Literature review + paper writing | ⬜ Not started |
 | 5 — Backend, dashboard, AWS deployment | ⬜ Not started |
 
-### What's actually built and tested in Phase 1
+### What's built and tested
 
-- **`data_pipeline/preprocessing.py`** — loads real `.edf` files, applies the paper's exact filter protocol (0.5–50 Hz bandpass, 45–55 Hz notch), runs ICA artifact removal, and splits resting-state recordings into eyes-closed/eyes-open segments.
-- **`data_pipeline/image_conversion.py`** — converts EEG epochs into the two image representations (CWT scalograms + topographic band-power heatmaps) that the classifier will train on.
-- Both have been **run end-to-end on real subject files** (not synthetic test data) — one ADHD subject, one Control subject, all three recording types (resting eyes-closed, eyes-open, and the Go/NoGo task).
+- **`data_pipeline/preprocessing.py`** — loads real `.edf` files, applies the paper's exact filter protocol (0.5–50 Hz bandpass, 45–55 Hz notch), runs ICA artifact removal, splits resting-state recordings into eyes-closed/eyes-open segments via the alpha-blocking effect.
+- **`data_pipeline/image_conversion.py`** — converts EEG epochs into CWT scalograms and topographic band-power heatmaps.
+- **`data_pipeline/subject_split.py`** — subject-level stratified holdout test set + stratified 5-fold CV, writing one manifest CSV every downstream script reads from, so train/test leakage is structurally prevented rather than relying on discipline.
+- **`data_pipeline/build_dataset.py`** — batch driver: runs preprocessing → split lookup → image conversion across the whole cohort in one command, with per-subject error handling and an audit log (`build_log.csv`) so one bad file can't crash a 103-subject run.
+- **`training/train_yolo_cls.py`** — subject-wise CV training driver for `yolov8n-cls`. Aggregates epoch-level predictions back to one prediction per subject before computing accuracy/sensitivity/specificity/AUC, since the baselines being compared against (75.8%/84.5%) are subject-level numbers.
+
+All of the above have been **run end-to-end on real subject files**, not synthetic test data — including a full real training pass through the Ultralytics API (pretrained weights → train → predict → aggregate → metrics → CSV).
 
 ### Real problems found and solved while building this
 
-The dataset didn't match the paper's description exactly, and figuring out the actual structure was most of Phase 1's real work:
-
 1. **No channel position data in the raw files** — broke topomap plotting outright. Fixed by attaching a standard 10-20 montage on load.
-2. **EOEC (resting-state) files have zero event markers** — no way to know where "eyes closed" ends and "eyes open" begins from metadata alone. Solved using the alpha-blocking effect (occipital alpha power is ~2–19x higher during eyes-closed rest, confirmed on 5 real subjects) instead of needing an external timing file.
-3. **VCPT (Go/NoGo) trigger channel doesn't encode trial conditions** — pulse count varies 100–175 across subjects with continuously-varying pulse width, consistent with a behavioral response marker (e.g. button-press duration), not the 4-condition stimulus code (A-A/A-P/P-P/P-H) the paper describes. **This means true P300 latency/amplitude and per-condition behavioral features (omission/commission/reaction time) can't currently be recovered.** Checked for companion marker files (none exist) and a `metadata.csv` (not present in what was extracted — may not exist at all; pending confirmation from the dataset's corresponding author). Fallback in place: fixed-window epoching for the CNN image pipeline (doesn't need condition labels, consistent with the classification-only decision above) and an approximate behavioral-proxy summary stat, both clearly flagged as approximations in the code and in `PROJECT.md`'s limitations.
-4. **Two real visualization bugs**, caught by actually looking at generated output images rather than trusting "the code ran without errors": scalogram images came out visually flat because EEG's natural 1/f power trend (theta band ~20x stronger than beta on real data) made a single global color scale drown out everything except the dominant band — fixed with per-frequency-row normalization. Topomap head shapes came out as stretched ovals because the pre-resize canvas wasn't square — fixed by keeping the composite figure square before the final resize.
-5. **One float-rounding edge case** in the EC/EO crop boundary that would have crashed on the full 103-subject batch — caught by testing on real files instead of assuming the logic was correct.
+2. **EOEC (resting-state) files have zero event markers.** Solved using the alpha-blocking effect (occipital alpha power ~2–19x higher during eyes-closed rest, confirmed on 5 real subjects) instead of needing an external timing file. Ambiguous-ratio subjects are flagged for manual QC, not silently trusted.
+3. **VCPT (Go/NoGo) trigger channel doesn't encode trial conditions** — pulse count varies 100–175 across subjects with continuously-varying pulse width, consistent with a behavioral response marker, not the 4-condition stimulus code the paper describes. **True P300 latency/amplitude and per-condition behavioral features can't currently be recovered** — no companion marker file or metadata.csv exists in what was extracted. Fallback in place: fixed-window epoching for the CNN pipeline (doesn't need condition labels) + an approximate behavioral-proxy stat, both clearly flagged as approximations. Pending confirmation from the dataset's corresponding author.
+4. **Scalogram images came out visually flat** — EEG's 1/f trend (theta ~20x beta power on real data) let a single global color scale drown out everything but the dominant band. Fixed with per-frequency-row normalization.
+5. **Topomap heads came out as stretched ovals** — pre-resize canvas wasn't square. Fixed by keeping the composite figure square before the final resize.
+6. **A float-rounding edge case** in the EC/EO crop boundary that would have crashed the full 103-subject batch.
+7. **A false-positive bug in the leakage detector itself** — an earlier filename-prefixing choice broke the subject-ID parser and would have flagged every subject as leaking, blocking all training. Found by testing the safety check with a deliberately-injected real leak, not by assuming it worked.
 
-None of this was visible from reading the paper or the dataset README alone — it only surfaced by loading and inspecting the actual `.edf` files.
+None of this was visible from reading the paper or the dataset README alone — it surfaced only by loading and running against the actual `.edf` files.
 
 ---
 
 ## What's next
 
-1. **Subject-wise train/val/test split** — must happen at the subject level, before any image generation at scale, or epochs from the same child leak across train and test.
-2. **Run the full pipeline on all 103 subjects** once the complete raw dataset is available locally (currently working from a handful of sample subjects).
-3. **Phase 2 — the critical checkpoint:** train the `yolov8n-cls` baseline with subject-wise 5-fold CV, replicate the classical TBR-based feature pipeline, build the fusion meta-classifier, and report accuracy/sensitivity/specificity/AUC with significance tests against both 75.8% and 84.5%. Nothing downstream gets built until this is done and understood.
-4. **Phase 3** — Grad-CAM, EC/EO coherence channel, clinical-plausibility check against known ADHD electrode/frequency sites.
-5. **Phase 4** — PRISMA-documented literature review (template already in `docs/literature_review/PRISMA_flow.md`), paper writing.
-6. **Phase 5** — FastAPI backend, dashboard, AWS deployment.
+1. **Run the full pipeline on all 103 subjects** once the complete raw dataset is available locally (currently verified against 5 sample subjects).
+2. **Phase 2 — the critical checkpoint:** real `yolov8n-cls` training with subject-wise 5-fold CV (30 epochs, GPU-backed), classical TBR-based feature replication, the fusion meta-classifier, and significance tests against both 75.8% and 84.5%. Nothing downstream gets built until this is done and understood.
+3. **Phase 3** — Grad-CAM, EC/EO coherence channel, clinical-plausibility check against known ADHD electrode/frequency sites.
+4. **Phase 4** — literature review, paper writing.
+5. **Phase 5** — FastAPI backend, dashboard, AWS deployment.
 
 ---
 
@@ -70,15 +73,17 @@ adhd-yolo/
 ├── PROGRESS.md # session-by-session log
 ├── data_pipeline/
 │ ├── preprocessing.py # EEG loading, filtering, ICA, EC/EO split
-│ └── image_conversion.py # CWT scalograms + topomap generation
+│ ├── image_conversion.py # CWT scalograms + topomap generation
+│ ├── subject_split.py # subject-wise train/test/CV manifest
+│ └── build_dataset.py # batch driver across the whole cohort
+├── training/
+│ └── train_yolo_cls.py # yolov8n-cls training + subject-level evaluation
 ├── models/ # trained weights (gitignored — large files)
 ├── backend/ # FastAPI serving the model (Phase 5)
 ├── frontend/ # dashboard (Phase 5)
 ├── notebooks/ # exploratory work
 ├── docs/
-│ ├── jira_board.md # epic/story breakdown
-│ └── literature_review/
-│ └── PRISMA_flow.md # literature search log template
+│ └── jira_board.md # epic/story breakdown
 └── docker-compose.yml # local dev, portable to EC2 later
 
 ## Tech stack
