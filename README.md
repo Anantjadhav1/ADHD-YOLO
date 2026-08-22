@@ -71,8 +71,7 @@ None of this was visible from reading the paper or the dataset README alone — 
 5. **Phase 5** — FastAPI backend, dashboard, AWS deployment.
 
 ---
-
-## Repo layout
+```
 adhd-yolo/
 ├── PROJECT.md                      # full methodology, decisions, roadmap
 ├── PROGRESS.md                     # session-by-session log
@@ -93,8 +92,7 @@ adhd-yolo/
 ├── docs/
 │   └── jira_board.md               # epic/story breakdown
 └── docker-compose.yml              # local dev, portable to EC2 later
-
-
+```
 ## Tech stack
 
 Signal processing: MNE-Python, MNE-Connectivity, PyWavelets, SciPy. ML: PyTorch, Ultralytics YOLOv8/v11, scikit-learn, XGBoost. Backend: FastAPI. Containers: Docker + docker-compose. Cloud: AWS S3 + EC2 (g4dn.xlarge). Version control: GitHub with branch-per-feature + PR workflow. Project tracking: Jira.
