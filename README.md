@@ -81,7 +81,7 @@ On the 5 real sample subjects, TBR came out **consistently higher for ADHD than 
 5. **Phase 5** — FastAPI backend, dashboard, AWS deployment.
 
 ---
-
+```
 ## Repo layout
 adhd-yolo/
 ├── PROJECT.md # full methodology, decisions, roadmap
@@ -106,7 +106,7 @@ adhd-yolo/
 ├── docs/
 │ └── jira_board.md # epic/story breakdown
 └── docker-compose.yml # local dev, portable to EC2 later
-
+```
 
 ## Tech stack
 
