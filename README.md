@@ -74,25 +74,25 @@ None of this was visible from reading the paper or the dataset README alone — 
 
 ## Repo layout
 adhd-yolo/
-├── PROJECT.md # full methodology, decisions, roadmap
-├── PROGRESS.md # session-by-session log
+├── PROJECT.md                      # full methodology, decisions, roadmap
+├── PROGRESS.md                     # session-by-session log
 ├── data_pipeline/
-│ ├── preprocessing.py # EEG loading, filtering, ICA, EC/EO split
-│ ├── image_conversion.py # CWT scalograms + topomaps + EC/EO coherence maps
-│ ├── subject_split.py # subject-wise train/test/CV manifest
-│ └── build_dataset.py # batch driver across the whole cohort
+│   ├── preprocessing.py            # EEG loading, filtering, ICA, EC/EO split
+│   ├── image_conversion.py         # CWT scalograms + topomaps + EC/EO coherence maps
+│   ├── subject_split.py            # subject-wise train/test/CV manifest
+│   └── build_dataset.py            # batch driver across the whole cohort
 ├── training/
-│ └── train_yolo_cls.py # yolov8n-cls training + subject-level evaluation
+│   └── train_yolo_cls.py           # yolov8n-cls training + subject-level evaluation
 ├── interpretability/
-│ ├── gradcam.py # Grad-CAM for the trained yolov8n-cls model
-│ └── clinical_plausibility.py # checks Grad-CAM attention against known ADHD sites
-├── models/ # trained weights (gitignored — large files)
-├── backend/ # FastAPI serving the model (Phase 5)
-├── frontend/ # dashboard (Phase 5)
-├── notebooks/ # exploratory work
+│   ├── gradcam.py                  # Grad-CAM for the trained yolov8n-cls model
+│   └── clinical_plausibility.py    # checks Grad-CAM attention against known ADHD sites
+├── models/                         # trained weights (gitignored — large files)
+├── backend/                        # FastAPI serving the model (Phase 5)
+├── frontend/                       # dashboard (Phase 5)
+├── notebooks/                      # exploratory work
 ├── docs/
-│ └── jira_board.md # epic/story breakdown
-└── docker-compose.yml # local dev, portable to EC2 later
+│   └── jira_board.md               # epic/story breakdown
+└── docker-compose.yml              # local dev, portable to EC2 later
 
 
 ## Tech stack
