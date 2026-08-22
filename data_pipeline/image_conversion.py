@@ -1,11 +1,12 @@
 """
 Phase 1 — 1D EEG -> 2D image conversion.
 
-Two representations per epoch, per PROJECT.md sec 4:
-  1. CWT scalograms (Complex Morlet) on Fz/Cz/Pz/F3/F4 -> composite image
-  2. Topographic power heatmaps across 5 bands -> composite image
+Three representations, per PROJECT.md sec 4:
+  1. CWT scalograms (Complex Morlet) on Fz/Cz/Pz/F3/F4 -> composite image, per epoch
+  2. Topographic power heatmaps across 5 bands -> composite image, per epoch
+  3. EC/EO coherence (functional connectivity) -> composite image, per subject/condition
 
-Both saved as 224x224 RGB PNGs, organized into class folders matching the
+Saved as 224x224 RGB PNGs, organized into class folders matching the
 Ultralytics yolov8n-cls expected dataset layout:
   output_dir/<representation>/<split>/<class>/<filename>.png
 
@@ -21,9 +22,14 @@ import matplotlib
 matplotlib.use("Agg")  # no display backend needed, we're just saving files
 import matplotlib.pyplot as plt
 import mne
+import mne_connectivity
 import numpy as np
 import pywt
 from PIL import Image
+
+from data_pipeline.preprocessing import CHANNELS_19  # the real 19 EEG channels —
+# reused here instead of redefining, so this module can never drift out of sync
+# with preprocessing.py about which channels are actually EEG vs. LABEL/dead.
 
 IMG_SIZE = 224
 
@@ -121,7 +127,7 @@ def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
                                task: str, split: str, output_dir: str,
                                max_epochs: int | None = None):
     """
-    Generate both representations for epochs from one subject/task, save to
+    Generate both per-epoch representations for one subject/task, save to
     disk in the class-folder layout yolov8n-cls expects:
         output_dir/<representation>/<split>/<class>/<filename>.png
 
@@ -129,7 +135,6 @@ def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
     split: "test", "fold_0".."fold_4" (or whatever data_pipeline/subject_split.py
         assigned this subject) — becomes a folder level so every image on disk
         traces back to the manifest that produced it. Get this via
-        subject_split.get_split_for_subject(manifest, subject_id) — see
         process_subject_from_manifest() below — never hand-assign it here,
         or you risk the exact subject-leakage bug subject_split.py exists to prevent.
     max_epochs: cap for quick testing; None processes all epochs.
@@ -158,6 +163,84 @@ def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
     return n
 
 
+def generate_coherence_image(epochs: mne.Epochs, ch_names: list) -> np.ndarray:
+    """
+    EC/EO functional connectivity representation, per PROJECT.md sec 4 step 3
+    ("New: add an EC/EO coherence representation... the source paper
+    specifically flags coherence as one of its five retained feature groups").
+
+    IMPORTANT DESIGN POINT, different from scalogram/topomap: this produces
+    ONE image per subject per condition (EC or EO), not one per epoch.
+    Coherence needs averaging across many trials for a stable estimate --
+    computing it from a single 1.5s epoch isn't meaningful. Call this once
+    on the full Epochs object for a condition, not per-epoch in a loop.
+
+    METHOD CHOICE, confirmed necessary by testing on real data: plain
+    coherence ('coh') came back 0.98-0.999 across EVERY channel pair
+    regardless of scalp distance, with almost no variance between bands --
+    this is volume conduction / common-reference inflation, a well-documented
+    EEG artifact, not real connectivity structure. It didn't improve with
+    longer epochs either (ruled out small-sample bias as the cause). Switched
+    to imaginary coherence ('imcoh'), which removes the zero-lag
+    volume-conduction component -- confirmed on real data this produces
+    genuine relative structure (values still small in absolute terms, but
+    with real variation across channel pairs, which is what a CNN can
+    actually learn from).
+    """
+    eeg_epochs = epochs.copy().pick(ch_names)  # exclude LABEL etc — confirmed necessary,
+    # LABEL was riding along uncounted (20 "channels" instead of 19) before this pick was added.
+
+    con = mne_connectivity.spectral_connectivity_epochs(
+        eeg_epochs, method="imcoh", mode="multitaper",
+        fmin=tuple(lo for lo, hi in TOPOMAP_BANDS.values()),
+        fmax=tuple(hi for lo, hi in TOPOMAP_BANDS.values()),
+        sfreq=eeg_epochs.info["sfreq"], faverage=True, verbose=False,
+    )
+    data = np.abs(con.get_data(output="dense"))  # imcoh can be negative; magnitude is what's meaningful
+
+    fig, axes = plt.subplots(1, len(TOPOMAP_BANDS), figsize=(10, 10))  # square canvas — same
+    # oval-distortion reasoning as generate_topomap_image applies to any square matrix plot too.
+
+    for ax, (band_name, _) in zip(axes, TOPOMAP_BANDS.items()):
+        band_idx = list(TOPOMAP_BANDS.keys()).index(band_name)
+        mat = data[:, :, band_idx]
+        mat = mat + mat.T  # library only fills the lower triangle; mirror it for a full symmetric matrix
+        # Per-band min-max normalization for visibility: imcoh magnitudes are small
+        # (~0.001-0.01) and vary a lot in overall scale between subjects/bands, so a
+        # fixed global vmin/vmax would wash out real structure the same way the
+        # unnormalized scalogram did earlier in this project.
+        vmax = mat.max() if mat.max() > 0 else 1.0
+        ax.imshow(mat, cmap="viridis", vmin=0, vmax=vmax)
+        ax.axis("off")
+
+    plt.subplots_adjust(hspace=0, wspace=0.05, left=0, right=1, top=1, bottom=0)
+    arr = _fig_to_rgb_array(fig)
+    plt.close(fig)
+    return arr
+
+
+def process_coherence_for_subject(epochs_by_task: dict, subject_id: str, label: str,
+                                    split: str, output_dir: str) -> dict:
+    """Generate the coherence image for EC and/or EO (whichever are present in
+    epochs_by_task — VCPT is deliberately excluded, coherence here is
+    specifically the EC/EO resting-state representation PROJECT.md calls for).
+    Returns {task: 1} for each generated, so callers can log counts the same
+    way as process_epochs_to_images."""
+    counts = {}
+    out_dir = os.path.join(output_dir, "coherence", split, label)
+    os.makedirs(out_dir, exist_ok=True)
+
+    for task in ["EC", "EO"]:
+        if task not in epochs_by_task:
+            continue
+        img = generate_coherence_image(epochs_by_task[task], CHANNELS_19)
+        path = os.path.join(out_dir, f"{subject_id}_{task}.png")
+        Image.fromarray(img).save(path)
+        counts[task] = 1
+
+    return counts
+
+
 def process_subject_from_manifest(epochs_by_task: dict, subject_id: str,
                                     manifest, output_dir: str,
                                     max_epochs: int | None = None) -> dict:
@@ -172,7 +255,8 @@ def process_subject_from_manifest(epochs_by_task: dict, subject_id: str,
         label are looked up from here, never passed by hand, so there's no
         way for a typo to put a subject's images in the wrong split folder.
 
-    Returns {task: n_epochs_processed}.
+    Returns {task: n_epochs_processed}, plus a "coherence" key with the
+    EC/EO coherence image counts.
     """
     row = manifest.loc[manifest["subject_id"] == subject_id]
     if row.empty:
@@ -188,4 +272,6 @@ def process_subject_from_manifest(epochs_by_task: dict, subject_id: str,
         counts[task] = process_epochs_to_images(
             epochs, subject_id, label, task, split, output_dir, max_epochs=max_epochs,
         )
+
+    counts["coherence"] = process_coherence_for_subject(epochs_by_task, subject_id, label, split, output_dir)
     return counts
