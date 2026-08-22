@@ -73,6 +73,8 @@ None of this was visible from reading the paper or the dataset README alone — 
 ---
 
 ## Repo layout
+
+​```
 adhd-yolo/
 ├── PROJECT.md                      # full methodology, decisions, roadmap
 ├── PROGRESS.md                     # session-by-session log
@@ -93,7 +95,7 @@ adhd-yolo/
 ├── docs/
 │   └── jira_board.md               # epic/story breakdown
 └── docker-compose.yml              # local dev, portable to EC2 later
-
+​```
 
 ## Tech stack
 
