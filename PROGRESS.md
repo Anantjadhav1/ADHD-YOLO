@@ -3,20 +3,16 @@
 Update this at the end of every working session — a few lines is enough. This is what lets a new chat pick up exactly where you left off.
 
 ## Format
+YYYY-MM-DD
+What was done
+What broke / what you learned
+Next step
 
-```
-### YYYY-MM-DD
-- What was done
-- What broke / what you learned
-- Next step
-```
-
----
 
 ---
 
 ### 2026-08-12
-- Project scoped and PROJECT.md written: classification-only + Grad-CAM (no bounding-box detection), subject-wise CV, transfer learning plan, biomarker fusion layer.
+- Project scoped and PROJECT.md written: classification-only + Grad-CAM (no bounding-box detection), subject-wise CV, transfer learning plan, biomarker fusion layer, PRISMA lit review plan.
 - Decisions locked: local dev with Docker from day one, classification over detection.
 - Repo skeleton created (this commit).
 - **Next:** get raw dataset from IEEE DataPort / your copy, confirm file format (.edf/.mat/.csv), start `data_pipeline/preprocessing.py` on a handful of subjects.
@@ -56,3 +52,20 @@ Update this at the end of every working session — a few lines is enough. This 
 - Verified the leakage check works both ways: confirmed it passes clean on a correct fold assembly, and confirmed it correctly catches a deliberately-injected real leak (same subject's file symlinked into both train and val).
 - Ran one real (if statistically meaningless — 1 epoch, ~10 images, one fold with a single subject) end-to-end training pass against real generated images: confirmed the full chain (YOLO pretrained weights load → train → predict → aggregate → metrics → CSV) runs without crashing. Fixed one cosmetic bug (Ultralytics nesting output under its own default `runs/classify/` instead of the given path) by resolving to an absolute path.
 - **Next:** once the full 103-subject dataset and a GPU-backed machine are available, run `subject_split.py` for the real manifest (5-fold default), `build_dataset.py` on all subjects, then `train_yolo_cls.py` for a real Phase 2 baseline result — this is the make-or-break checkpoint per PROJECT.md.
+
+### 2026-08-1x (backfilled — EC/EO coherence representation)
+- Extended `data_pipeline/image_conversion.py` with a third image representation: EC/EO functional connectivity (coherence) maps, per PROJECT.md sec 4 step 3 — the source paper specifically flags coherence as one of its five retained feature groups.
+  - Design point: unlike scalogram/topomap, this is computed once per subject per condition (EC or EO) across the whole `Epochs` object, not per individual epoch — coherence needs averaging across many trials for a stable estimate.
+  - **Real problem found:** plain coherence (`'coh'`) came back saturated at 0.98–0.999 across every channel pair regardless of scalp distance, with almost no variance between bands. Confirmed this is volume conduction / common-reference inflation (a known EEG artifact), not real connectivity — ruled out small-sample bias by testing with longer epochs too. Fixed by switching to imaginary coherence (`'imcoh'`), which removes the zero-lag component and shows genuine variation across channel pairs.
+  - **Second bug found:** the LABEL channel was being silently included as a 20th "channel" in the coherence calculation before an explicit `.pick(CHANNELS_19)` was added to exclude it.
+  - `image_conversion.py` now imports `CHANNELS_19` directly from `preprocessing.py` instead of redefining the channel list, so the two modules can't drift out of sync about which channels are real EEG.
+- Updated `backend/requirements.txt`: added `mne-connectivity` (coherence computation) and `xgboost` (planned for the fusion meta-classifier in Phase 2).
+- **Next:** re-run `build_dataset.py` on the 5 sample subjects to confirm the new coherence images generate correctly end-to-end alongside the existing scalogram/topomap outputs, before scaling to the full cohort.
+
+### 2026-08-1x (backfilled — interpretability scaffold)
+- Built `interpretability/gradcam.py`: Grad-CAM for the trained `yolov8n-cls` model. Hooks into `model.model.model[8]` — confirmed by inspecting the real loaded model architecture (not assumed from documentation) — the final C2f block, immediately before the Classify head at index `[9]`.
+  - Confirmed by inspecting real model output that the forward pass returns a `(probs, logits)` tuple, not a plain tensor. Backprop is done on the raw logit rather than the softmaxed probability, since backpropping through softmax risks flattened gradients once a class is already confident — verified `probs[i] == softmax(logits)[i]` on real output before relying on this.
+- Built `interpretability/clinical_plausibility.py`: checks whether Grad-CAM attention concentrates on the electrode sites known to matter for ADHD (frontal Fz/F3/F4 for theta/beta, central-parietal Cz/Pz for P300), per PROJECT.md sec 4 step 7. Designed as a sanity check that reports a real finding either way, not a metric to force-pass.
+  - **Bug found in testing:** with the current 5 scalogram channels (Fz, Cz, Pz, F3, F4), every channel is already either "frontal" or "central-parietal," so the "other channels" comparison group is always empty. Comparing against an empty group's mean (`NaN`) is always `False` in Python, which silently made the plausibility flag always `False` regardless of the actual attention pattern. Caught by testing with a synthetic heatmap that should have passed and didn't — not caught by code review alone.
+- Neither module has been run against a real trained model yet — both depend on `training/train_yolo_cls.py` producing real trained weights first, which is still blocked on the full dataset + GPU (see 2026-08-17 entry).
+- **Next:** once Phase 2's real training run produces a trained model, run Grad-CAM + the plausibility check against real test-set predictions for the first time.

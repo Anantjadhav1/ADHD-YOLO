@@ -1,6 +1,6 @@
 # ADHD-YOLO
 
-YOLO-based image classification framework for pediatric ADHD screening from EEG/ERP signals — converted to 2D scalograms and topographic heatmaps, classified with `yolov8n-cls`, explained with Grad-CAM, and fused with classical EEG biomarkers. Built as both a research project (thesis-grade methodology) and an engineering portfolio piece (FastAPI backend, Docker, AWS deployment).
+YOLO-based image classification framework for pediatric ADHD screening from EEG/ERP signals — converted to 2D scalograms, topographic heatmaps, and EC/EO coherence maps, classified with `yolov8n-cls`, explained with Grad-CAM, and fused with classical EEG biomarkers. Built as both a research project (thesis-grade methodology) and an engineering portfolio piece (FastAPI backend, Docker, AWS deployment).
 
 Full methodology, decisions, and roadmap: see `PROJECT.md`. Session-by-session log: see `PROGRESS.md`. This file is the high-level orientation — what the project is, where it stands, and what's next.
 
@@ -8,7 +8,7 @@ Full methodology, decisions, and roadmap: see `PROJECT.md`. Session-by-session l
 
 ## What this project actually does
 
-Takes raw EEG recordings from children (resting-state eyes-open/eyes-closed, plus a Go/NoGo attention task), converts the 1D signal into 2D image representations, and classifies ADHD vs. Control using a YOLO image classifier — with the model's reasoning made visible via Grad-CAM, and its output fused with classical hand-engineered EEG biomarkers (theta/beta ratio, etc.) for a stronger combined prediction.
+Takes raw EEG recordings from children (resting-state eyes-open/eyes-closed, plus a Go/NoGo attention task), converts the 1D signal into 2D image representations (scalograms, topomaps, and EC/EO coherence maps), and classifies ADHD vs. Control using a YOLO image classifier — with the model's reasoning made visible via Grad-CAM, checked against known ADHD-relevant electrode sites for clinical plausibility, and fused with classical hand-engineered EEG biomarkers (theta/beta ratio, etc.) for a stronger combined prediction.
 
 **This is a decision-support research tool, not a diagnostic device.** That framing is deliberate and stated everywhere in the project — see `PROJECT.md` §2.
 
@@ -27,21 +27,23 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | ✅ Built and verified against real subjects |
+| 1 — Data pipeline | ✅ Done and verified against real subjects (now 3 image representations) |
 | 2 — Baseline model + fusion (the make-or-break checkpoint) | 🟡 Training driver built and smoke-tested; real run pending full dataset + GPU |
-| 3 — Grad-CAM + clinical-plausibility check | ⬜ Not started |
+| 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written; blocked on Phase 2's real trained model before it can be exercised for real |
 | 4 — Literature review + paper writing | ⬜ Not started |
 | 5 — Backend, dashboard, AWS deployment | ⬜ Not started |
 
 ### What's built and tested
 
 - **`data_pipeline/preprocessing.py`** — loads real `.edf` files, applies the paper's exact filter protocol (0.5–50 Hz bandpass, 45–55 Hz notch), runs ICA artifact removal, splits resting-state recordings into eyes-closed/eyes-open segments via the alpha-blocking effect.
-- **`data_pipeline/image_conversion.py`** — converts EEG epochs into CWT scalograms and topographic band-power heatmaps.
+- **`data_pipeline/image_conversion.py`** — converts EEG epochs into three representations: CWT scalograms, topographic band-power heatmaps, and (new) EC/EO functional-connectivity (imaginary coherence) maps.
 - **`data_pipeline/subject_split.py`** — subject-level stratified holdout test set + stratified 5-fold CV, writing one manifest CSV every downstream script reads from, so train/test leakage is structurally prevented rather than relying on discipline.
 - **`data_pipeline/build_dataset.py`** — batch driver: runs preprocessing → split lookup → image conversion across the whole cohort in one command, with per-subject error handling and an audit log (`build_log.csv`) so one bad file can't crash a 103-subject run.
 - **`training/train_yolo_cls.py`** — subject-wise CV training driver for `yolov8n-cls`. Aggregates epoch-level predictions back to one prediction per subject before computing accuracy/sensitivity/specificity/AUC, since the baselines being compared against (75.8%/84.5%) are subject-level numbers.
+- **`interpretability/gradcam.py`** — Grad-CAM implementation hooked into the real, inspected `yolov8n-cls` architecture (final C2f block before the classify head), producing attention heatmaps and image overlays.
+- **`interpretability/clinical_plausibility.py`** — checks whether Grad-CAM attention concentrates on the electrode sites known to matter for ADHD (frontal for theta/beta, central-parietal for P300), per task. Reports a real finding either way — not a metric to force-pass.
 
-All of the above have been **run end-to-end on real subject files**, not synthetic test data — including a full real training pass through the Ultralytics API (pretrained weights → train → predict → aggregate → metrics → CSV).
+All data-pipeline and training code above has been **run end-to-end on real subject files**, not synthetic test data. The interpretability code has been built and internally bug-tested (see PROGRESS.md) but not yet run against a real trained model, since that depends on Phase 2's full run.
 
 ### Real problems found and solved while building this
 
@@ -52,8 +54,11 @@ All of the above have been **run end-to-end on real subject files**, not synthet
 5. **Topomap heads came out as stretched ovals** — pre-resize canvas wasn't square. Fixed by keeping the composite figure square before the final resize.
 6. **A float-rounding edge case** in the EC/EO crop boundary that would have crashed the full 103-subject batch.
 7. **A false-positive bug in the leakage detector itself** — an earlier filename-prefixing choice broke the subject-ID parser and would have flagged every subject as leaking, blocking all training. Found by testing the safety check with a deliberately-injected real leak, not by assuming it worked.
+8. **Plain coherence came back saturated (0.98–0.999) across every channel pair regardless of scalp distance** — a known EEG artifact (volume conduction / common-reference inflation), not real connectivity. Switched to imaginary coherence (`imcoh`), which removes the zero-lag component and shows genuine structure.
+9. **LABEL channel was silently riding along as a 20th "channel"** into the coherence calculation before an explicit channel pick was added to exclude it.
+10. **A NaN-comparison bug in the clinical-plausibility check** — with the current 5 scalogram channels, every channel is already frontal or central-parietal, so the "other channels" group was always empty, making a mean-of-empty-list comparison silently always False regardless of the real attention pattern. Caught by testing with a synthetic heatmap that should have passed and didn't.
 
-None of this was visible from reading the paper or the dataset README alone — it surfaced only by loading and running against the actual `.edf` files.
+None of this was visible from reading the paper or the dataset README alone — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
 
 ---
 
@@ -61,7 +66,7 @@ None of this was visible from reading the paper or the dataset README alone — 
 
 1. **Run the full pipeline on all 103 subjects** once the complete raw dataset is available locally (currently verified against 5 sample subjects).
 2. **Phase 2 — the critical checkpoint:** real `yolov8n-cls` training with subject-wise 5-fold CV (30 epochs, GPU-backed), classical TBR-based feature replication, the fusion meta-classifier, and significance tests against both 75.8% and 84.5%. Nothing downstream gets built until this is done and understood.
-3. **Phase 3** — Grad-CAM, EC/EO coherence channel, clinical-plausibility check against known ADHD electrode/frequency sites.
+3. **Phase 3** — run Grad-CAM and the clinical-plausibility check against the real trained model once Phase 2 produces one.
 4. **Phase 4** — literature review, paper writing.
 5. **Phase 5** — FastAPI backend, dashboard, AWS deployment.
 
@@ -73,11 +78,14 @@ adhd-yolo/
 ├── PROGRESS.md # session-by-session log
 ├── data_pipeline/
 │ ├── preprocessing.py # EEG loading, filtering, ICA, EC/EO split
-│ ├── image_conversion.py # CWT scalograms + topomap generation
+│ ├── image_conversion.py # CWT scalograms + topomaps + EC/EO coherence maps
 │ ├── subject_split.py # subject-wise train/test/CV manifest
 │ └── build_dataset.py # batch driver across the whole cohort
 ├── training/
 │ └── train_yolo_cls.py # yolov8n-cls training + subject-level evaluation
+├── interpretability/
+│ ├── gradcam.py # Grad-CAM for the trained yolov8n-cls model
+│ └── clinical_plausibility.py # checks Grad-CAM attention against known ADHD sites
 ├── models/ # trained weights (gitignored — large files)
 ├── backend/ # FastAPI serving the model (Phase 5)
 ├── frontend/ # dashboard (Phase 5)
@@ -86,9 +94,10 @@ adhd-yolo/
 │ └── jira_board.md # epic/story breakdown
 └── docker-compose.yml # local dev, portable to EC2 later
 
+
 ## Tech stack
 
-Signal processing: MNE-Python, PyWavelets, SciPy. ML: PyTorch, Ultralytics YOLOv8/v11, scikit-learn, XGBoost. Backend: FastAPI. Containers: Docker + docker-compose. Cloud: AWS S3 + EC2 (g4dn.xlarge). Version control: GitHub with branch-per-feature + PR workflow. Project tracking: Jira.
+Signal processing: MNE-Python, MNE-Connectivity, PyWavelets, SciPy. ML: PyTorch, Ultralytics YOLOv8/v11, scikit-learn, XGBoost. Backend: FastAPI. Containers: Docker + docker-compose. Cloud: AWS S3 + EC2 (g4dn.xlarge). Version control: GitHub with branch-per-feature + PR workflow. Project tracking: Jira.
 
 ## Setup
 
@@ -109,4 +118,5 @@ Health check: `http://localhost:8000/health`
 
 - Dataset is 103 subjects — small for a deep classifier; subject-wise validation and transfer learning are mandatory, not optional, because of this.
 - P300 latency/amplitude and per-condition behavioral features are currently unavailable pending clarification from the dataset source (see "Real problems found" above).
+- Grad-CAM and the clinical-plausibility check are built and internally tested but have not yet been run against a real trained model — that depends on Phase 2's real training run.
 - This is a research/decision-support tool. It does not diagnose ADHD and is not a replacement for clinical evaluation.
