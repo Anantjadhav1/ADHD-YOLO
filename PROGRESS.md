@@ -96,3 +96,49 @@ Next step
 - **Bug found (new, more serious):** `NaN` isn't valid JSON. Since P300/behavioral biomarker fields are currently always `NaN`, this would have made **every single `/predict` request return a 500 error** — only surfaced by testing an actual HTTP request through FastAPI's `TestClient`, not by testing `run_inference()` as a plain Python function (where `NaN` floats are perfectly valid). Fixed by converting `NaN` → `None` (JSON `null`) before returning, which is also the more correct representation of "not available."
 - Verified full real request/response cycle: real EEG files, real (toy) trained checkpoint, through `TestClient` — 200 response, correct prediction/confidence/TBR/Grad-CAM/disclaimer fields, P300 fields correctly `null` not `nan`.
 - **Next:** cap epochs-per-request for response time (currently processes all 505 epochs in a real 12-minute file), then wire the fusion classifier in as an optional second prediction once Phase 2's real model exists.
+
+### 2026-08-23 — TBR units bug confirmed; TBR fails to separate groups at n=20; full dataset located
+
+Session goal was narrow: test whether the unexplained TBR magnitude (9-16 vs published 1.5-3.5, flagged on 2026-08-19) was a units bug. It was. But testing it on 20 subjects instead of 5 overturned a bigger claim.
+
+**Built `training/verify_tbr.py`** — a read-only diagnostic that computes TBR four ways side by side (`.mean()` vs `np.trapezoid` band power × `nperseg` 256 vs 1000) and reports both magnitude and group separation. Changes no pipeline code; reuses `preprocessing.py`'s real functions so numbers are directly comparable to what the pipeline produces. Skips ICA deliberately (see below).
+
+**CONFIRMED — the TBR magnitude anomaly is a units bug.**
+- `classical_features.compute_tbr()` takes `.mean()` of the PSD across each band. That is average spectral *density*, not band *power*. Published TBR uses the integral. Theta spans 4 Hz, beta spans 18 Hz, so the ratio is inflated by ~18/4 = 4.5x.
+- **Measured inflation on 20 real subjects: 4.88x** (predicted ~4.5x).
+- Group means under the corrected method land inside the published range: EC 2.66 (ADHD) / 2.87 (Control), EO 1.92 / 1.95, VCPT 2.48 / 2.41. The 9-16 anomaly is fully explained. No data problem.
+
+**OVERTURNED — TBR does not separate ADHD from Control.** This contradicts the 2026-08-19 entry's claim of "a real, consistent, discriminative pattern (ADHD higher than Control across every condition)" from 5 subjects. On 20 subjects (10/10), bootstrapped subject-level AUC:
+
+| Condition | AUC | 95% CI | Direction |
+|---|---|---|---|
+| EC | 0.430 | [0.18, 0.70] | **reversed** — Control higher than ADHD |
+| EO | 0.490 | [0.24, 0.75] | none |
+| VCPT | 0.550 | [0.28, 0.80] | correct but negligible |
+
+All three CIs contain 0.5. The 5-subject signal was noise. Recorded here rather than quietly dropped, because it was written up as an encouraging finding in two prior documents.
+
+**The units fix does not change separation** — AUC moves 0.420 -> 0.430 (EC), 0.460 -> 0.450 (EO), 0.580 -> 0.550 (VCPT). It is a correctness fix, not an accuracy fix. Worth adopting so the number is defensible and comparable to literature, but it will not move the Phase 2 result.
+
+**Implication for PROJECT.md 5a:** the premise that classical biomarkers + fusion are "the single highest-leverage item for accuracy on this dataset" currently rests on 3 features, and those 3 are at chance. The premise isn't dead — Rohani et al. reached 84.5% with 113 selected features, not 3 — but expanding the classical feature set is now the critical path for that claim, not an optional enhancement. TBR alone was never going to carry it.
+
+**Other real problems found this session:**
+
+1. **`parse_filename`'s regex matched ZERO real files.** It required underscores in the date/time (`2019_09_08`); the actual dataset uses dots (`C09090107-2019.12.29-15.25.17-EOEC.edf`). `discover_subjects` would have raised `ValueError` on the first file of the 103-subject run. The docstring documented the wrong convention, which is how this survived. Fixed to accept `[._-]` as separator.
+2. **`nperseg=1000` is silently capped at 751 by the 1.5 s epoch length** — confirmed by the bin counts in the output (6 theta bins, not the 9 that 0.5 Hz resolution would give). Epoch length physically caps frequency resolution. TBR is a subject-level summary and has no reason to be computed on epochs at all; computing it on the continuous segment would give both better resolution and far more averaging, for free.
+3. **`remove_artifacts_ica()` is a no-op.** `ica.apply()` is called with an empty `exclude` list, which reconstructs the signal bit-identically. There is currently zero artifact rejection anywhere in the pipeline, and it costs a full ICA fit per recording (~206 fits on the full cohort) for no change in output.
+4. **5/20 subjects show EC < EO**, against the expected direction (theta/beta is higher eyes-closed). `F09081100, F09101156, F10011103, C10011101, C10020106`. These are candidates for a flipped EC/EO assignment. Suggests a cheap QC rule: TBR direction should agree with `alpha_ratio`, and disagreement flags a subject — stronger than the alpha ratio alone.
+5. **`PROJECT.md` does not contain the methodology document.** It is a 38-line truncated copy of PROGRESS.md ending mid-August. Every module in the repo cites "PROJECT.md sec 4 step 3", "sec 5a", "sec 6 Phase 2" — none of those sections exist in the file. Needs recovering from git history. **Blocking for the paper**, since it holds the locked design decisions and the limitations list.
+6. **Environment gotcha:** on this Windows box, `python` and `python3` both resolve to MSYS2's Python (`C:\msys64\ucrt64\bin\`), which has no packages. `pip` installs into `C:\Users\<user>\AppData\Local\Programs\Python\Python313\`. Use `py -m ...`, or set up a venv. Also note `where` in PowerShell is an alias for `Where-Object`, not `where.exe`.
+
+**FULL DATASET LOCATED** — `D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files. This was the single biggest blocker since 2026-08-17 and it is gone. Two things to resolve before the real run:
+- 109 files vs 103 subjects in the paper. `discover_subjects` raises on duplicate subject IDs, so it will halt. Need to determine whether these are genuine re-recorded sessions or the same files copied into both `edf (all)` and the `edf (just c)` / `edf (just f)` subfolders. **Check not yet run.**
+- `discover_subjects` globs both `*-EOEC.edf` and `*-EOEC.EDF`. Windows filesystems are case-insensitive, so both patterns likely match the same files, producing a duplicate for every subject and tripping the same guard. Needs `set()` dedup. **Prediction, not yet verified.**
+
+**Measured, not assumed — inputs for Phase 2 planning:**
+- VCPT accounts for **65% of all epoch-images** (VCPT ~870-920 epochs/subject vs EC/EO ~200-370 each). Training on all three conditions mixed means two thirds of the training signal is one condition.
+- Per-subject total epoch count varies 1275-1616 (1.27x). Milder than feared, but still argues for capping epochs per subject so recording length can't become a learnable feature.
+
+**Not changed this session** (deliberately — verify first, patch second): `classical_features.py` still uses `.mean()`. The patch is understood and small, but should land together with the move off epochs onto the continuous signal rather than as two separate edits.
+
+- **Next:** (1) run the duplicate-subject-ID check on the 109 files; (2) recover `PROJECT.md` from git history; (3) patch `classical_features.py` — trapz + continuous-signal PSD; (4) expand the classical feature set beyond TBR (relative band power per channel, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries) — now critical path, not optional; (5) resolve the ICA no-op before any real training run, since every image and every feature currently comes from unrejected data.

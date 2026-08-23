@@ -63,12 +63,16 @@ class SubjectFile:
 
 def parse_filename(filepath: str) -> SubjectFile:
     """
-    Parse the real filename convention: <ID>-<YYYY_MM_DD>-<HH_MM_SS>-<TASK>.edf
-    e.g. F08080102-2019_09_08-10_42_29-EOEC.EDF
+        Parse the real filename convention: <ID>-<YYYY.MM.DD>-<HH.MM.SS>-<TASK>.edf
+    e.g. C09090107-2019.12.29-15.25.17-EOEC.edf
+    Dots, underscores and hyphens are all accepted as date/time separators.
     """
     import os
     fname = os.path.basename(filepath)
-    m = re.match(r"([A-Za-z0-9]+)-(\d{4}_\d{2}_\d{2})-(\d{2}_\d{2}_\d{2})-(\w+)\.edf", fname, re.IGNORECASE)
+    m = re.match(
+    r"([A-Za-z0-9]+)-(\d{4}[._-]\d{2}[._-]\d{2})-(\d{2}[._-]\d{2}[._-]\d{2})-(\w+)\.edf",
+    fname, re.IGNORECASE
+ )
     if not m:
         raise ValueError(f"Filename doesn't match expected pattern: {fname}")
     subject_id, date, time, task = m.groups()
@@ -99,9 +103,9 @@ def filter_raw(raw: mne.io.Raw) -> mne.io.Raw:
     eeg_picks = [ch for ch in CHANNELS_19 if ch in raw.ch_names]
     raw = raw.copy().filter(
         l_freq=BANDPASS_LOW_HZ, h_freq=BANDPASS_HIGH_HZ,
-        picks=eeg_picks, method="fir", phase="zero",
+        picks=eeg_picks, method="fir", phase="zero", verbose=False,
     )
-    raw = raw.notch_filter(freqs=NOTCH_FREQ_HZ, picks=eeg_picks)
+    raw = raw.notch_filter(freqs=NOTCH_FREQ_HZ, picks=eeg_picks, verbose=False)
     return raw
 
 
