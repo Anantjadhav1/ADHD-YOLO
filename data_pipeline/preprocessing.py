@@ -25,6 +25,7 @@ reading of the paper:
 """
 
 import re
+import warnings
 from dataclasses import dataclass
 
 import mne
@@ -48,6 +49,67 @@ LABEL_CHANNEL = "LABEL"
 
 EPOCH_LENGTH_SEC = 1.5
 ALPHA_BAND_HZ = (8, 12)
+
+# --- Artifact rejection ---
+# No real EOG channel exists in this dataset (X1/X2 confirmed dead), so blink
+# detection uses the frontopolar channels as proxies. Blinks dominate Fp1/Fp2,
+# so the correlation is driven by ocular activity -- but note these ARE real
+# EEG channels, so some genuine frontopolar brain signal is removed with them.
+# Acceptable here because TBR is computed at F3/F4/Fz, not Fp1/Fp2. State this
+# limitation in the methods section.
+EOG_PROXY_CHANNELS = ["Fp1", "Fp2"]
+
+# ICA decomposition degrades with low-frequency drift, so ICA is FIT on a 1 Hz
+# high-passed copy and the resulting solution APPLIED to the 0.5 Hz data. This
+# is standard MNE practice, not a deviation.
+ICA_HIGHPASS_HZ = 1.0
+
+# Peak-to-peak epoch rejection. 150 uV is a conventional starting point for
+# pediatric EEG after ICA has removed blinks. Rejection RATE is reported per
+# recording so unusually bad subjects surface instead of silently contributing
+# fewer images.
+# Set from the measured amplitude distribution on C09090107 EC (post-ICA), not
+# from a literature convention -- 150 uV rejected 100% of epochs pre-ICA and
+# 15% post-ICA, cutting into the bulk of the distribution rather than its tail.
+#
+# Post-ICA per-channel medians run 33-103 uV, with O1/O2/Pz highest, which is
+# genuine eyes-closed occipital alpha, not artifact. The worst-channel
+# distribution has p90 = 167 uV and p95 = 544 uV -- a sharp discontinuity, so
+# real artifact begins somewhere past 500.
+#
+# 250 uV sits in that gap: above O2's p90 (146 uV) so strong-alpha epochs
+# survive, below the outlier population so transients are caught. Keeps 92%.
+# A tighter threshold would preferentially reject high-alpha epochs, biasing
+# the EC condition against its own dominant physiological feature.
+# Set from the measured post-ICA amplitude distribution on C09090107 EC, not a
+# literature convention. 150 uV rejected 100% of epochs pre-ICA and 15%
+# post-ICA, cutting into the bulk of the distribution rather than its tail.
+# Post-ICA per-channel medians run 33-103 uV, highest at O1/O2/Pz -- that is
+# genuine eyes-closed occipital alpha, not artifact. Worst-channel p90 = 167 uV,
+# p95 = 544 uV: a sharp discontinuity, so real artifact starts past ~500.
+# 250 uV sits in that gap and keeps 92% of epochs. A tighter threshold would
+# preferentially reject high-alpha epochs, biasing EC against its own dominant
+# physiological feature.
+REJECT_PEAK_TO_PEAK_V = 250e-6
+
+# Muscle-component detection threshold. MNE's default (0.5) flagged 5 of 19
+# components on C09090107 and 14 of 19 on F09080101 -- destroying the
+# decomposition. A sweep across 0.5-1.0 on 4 subjects (see
+# training/sweep_muscle_threshold.py) showed TBR moving 8-311% with this
+# parameter alone, in INCONSISTENT directions across subjects. 0.9 keeps 3 of 4
+# subjects inside the 1-4 component target; 1.0 disables muscle detection
+# entirely. Report this sensitivity in the methods -- do not present a single
+# TBR value as if the parameter were fixed by anything but judgement.
+MUSCLE_THRESHOLD = 0.9
+
+# Hard cap on components removed. If detection wants more than a quarter of the
+# decomposition, the recording is the problem -- flag the subject rather than
+# silently reconstructing it from a handful of components. EOG is never capped
+# (unambiguous, consistently 2 across every subject and threshold tested);
+# muscle is capped by score, strongest kept.
+MAX_ICA_COMPONENTS_EXCLUDED = 5
+FLAT_THRESHOLD_V = 1e-7  # catches dead/disconnected channel segments
+HIGH_REJECTION_RATE_WARN = 0.30
 ALPHA_AMBIGUOUS_RATIO_RANGE = (0.7, 1.4)  # ratio inside this range -> flag for manual QC
 
 
@@ -109,22 +171,100 @@ def filter_raw(raw: mne.io.Raw) -> mne.io.Raw:
     return raw
 
 
-def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19) -> mne.io.Raw:
+def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
+                         eog_proxy: list = EOG_PROXY_CHANNELS) -> tuple:
     """
-    ICA on the 19 EEG channels only. No usable EOG channel exists in this
-    dataset (X1/X2 confirmed dead), so ocular component identification must
-    rely on frontal-channel correlation (Fp1/Fp2) or manual/automatic
-    component inspection — spot-check on real subjects before trusting it
-    across all 103.
+    ICA-based artifact removal on the 19 EEG channels.
+
+    PREVIOUSLY A NO-OP: this function used to fit an ICA and then call
+    ica.apply() with an empty exclude list, which reconstructs the signal
+    bit-identically. It cost a full ICA fit per recording and changed nothing.
+    Every image and feature produced before 2026-08-24 came from unrejected
+    data. See PROGRESS.md.
+
+    Two detectors run:
+      - EOG (blinks/saccades) via correlation with Fp1/Fp2 as proxies
+      - Muscle (EMG) via ica.find_bads_muscle
+
+    Muscle detection matters specifically here: EMG contaminates 20 Hz and
+    above, which is the beta band -- the DENOMINATOR of TBR. Blinks contaminate
+    delta/theta, the numerator. So artifact hits the primary biomarker from
+    both directions.
+
+    Returns (cleaned_raw, diagnostics). Diagnostics are returned rather than
+    logged so callers can record them per subject -- silent cleaning would hide
+    a recording where half the components were rejected.
+
+    Never raises on detection failure: warns and returns the data uncleaned,
+    so one bad subject can't kill a 103-subject batch.
     """
     eeg_picks = [ch for ch in CHANNELS_19 if ch in raw.ch_names]
-    ica = mne.preprocessing.ICA(n_components=min(n_components, len(eeg_picks)), random_state=42)
-    ica.fit(raw, picks=eeg_picks)
-    # TODO: identify ocular components via correlation with Fp1/Fp2 (proxy
-    # for EOG since no real EOG channel exists), or manual inspection on a
-    # subset, before applying automatically to all subjects.
-    raw_clean = ica.apply(raw.copy())
-    return raw_clean
+
+    # Fit on a 1 Hz high-passed copy; apply to the original.
+    raw_for_fit = raw.copy().filter(
+        l_freq=ICA_HIGHPASS_HZ, h_freq=None, picks=eeg_picks,
+        method="fir", phase="zero", verbose=False,
+    )
+
+    ica = mne.preprocessing.ICA(
+        n_components=min(n_components, len(eeg_picks)),
+        random_state=42, max_iter="auto",
+    )
+    ica.fit(raw_for_fit, picks=eeg_picks, verbose=False)
+
+    exclude, reasons = set(), {}
+
+    proxies = [ch for ch in eog_proxy if ch in raw.ch_names]
+    if proxies:
+        try:
+            eog_idx, _ = ica.find_bads_eog(raw_for_fit, ch_name=proxies, verbose=False)
+            for i in eog_idx:
+                reasons.setdefault(i, []).append("eog")
+            exclude.update(eog_idx)
+        except Exception as e:  # noqa: BLE001 - never kill the batch
+            warnings.warn(f"EOG component detection failed: {e}")
+    else:
+        warnings.warn("No EOG proxy channels present; skipping blink detection.")
+
+        muscle_idx = []
+    try:
+        muscle_idx, muscle_scores = ica.find_bads_muscle(
+            raw_for_fit, threshold=MUSCLE_THRESHOLD, verbose=False)
+        # Cap by score, keeping the strongest. EOG is never capped.
+        allowed = max(0, MAX_ICA_COMPONENTS_EXCLUDED - len(exclude))
+        if len(muscle_idx) > allowed:
+            ranked = sorted(muscle_idx, key=lambda i: abs(muscle_scores[i]), reverse=True)
+            capped_out = ranked[allowed:]
+            muscle_idx = ranked[:allowed]
+            warnings.warn(
+                f"Muscle detection flagged {len(ranked)} of {ica.n_components_} "
+                f"components; capped to {allowed}. Dropped from the exclude list: "
+                f"{sorted(capped_out)}. FLAG THIS SUBJECT FOR MANUAL QC -- a "
+                f"decomposition this contaminated is a recording problem, and "
+                f"reconstructing from the remainder would not be trustworthy."
+            )
+        for i in muscle_idx:
+            reasons.setdefault(i, []).append("muscle")
+        exclude.update(muscle_idx)
+    except Exception as e:  # noqa: BLE001
+        warnings.warn(f"Muscle component detection failed: {e}")
+
+    ica.exclude = sorted(exclude)
+    raw_clean = ica.apply(raw.copy(), verbose=False)
+
+    n_flagged = len(proxies and exclude or exclude)
+    diagnostics = {
+        "n_components": int(ica.n_components_),
+        "n_excluded": len(ica.exclude),
+        "excluded": [int(i) for i in ica.exclude],
+        "reasons": {int(i): "+".join(r) for i, r in sorted(reasons.items())},
+        "eog_proxy_used": proxies,
+        "muscle_threshold": MUSCLE_THRESHOLD,
+        # True when the cap fired -- carry this into the audit log so
+        # over-contaminated subjects can be reviewed before Phase 2.
+        "capped": len(ica.exclude) >= MAX_ICA_COMPONENTS_EXCLUDED,
+    }
+    return raw_clean, diagnostics
 
 
 def split_eoec_by_alpha(raw: mne.io.Raw, trim_sec: float = 15.0) -> dict:
@@ -167,13 +307,54 @@ def split_eoec_by_alpha(raw: mne.io.Raw, trim_sec: float = 15.0) -> dict:
     return {"ec": ec_raw, "eo": eo_raw, "alpha_ratio": ratio, "ambiguous": ambiguous}
 
 
-def epoch_signal(raw: mne.io.Raw, epoch_length_sec: float = EPOCH_LENGTH_SEC) -> mne.Epochs:
-    """Fixed-length sliding-window epochs. Used for EOEC (EC/EO) and for the
-    full VCPT recording, since the classification-only pipeline doesn't
-    require trial-locked epochs — only Grad-CAM/interpretability would ever
-    want stimulus-locked windows, and that's blocked pending trigger info."""
+def epoch_signal(raw: mne.io.Raw, epoch_length_sec: float = EPOCH_LENGTH_SEC,
+                 reject_uv: float = REJECT_PEAK_TO_PEAK_V,
+                 return_diagnostics: bool = False):
+    """
+    Fixed-length sliding-window epochs with peak-to-peak artifact rejection.
+
+    Rejection was previously ABSENT -- no reject parameter was passed, so every
+    artifact-laden segment became a training image. Pass reject_uv=None to
+    restore the old behaviour for comparison.
+
+    tmax is epoch_length - 1/sfreq so epochs are exactly the intended length;
+    tmax=epoch_length yields one extra sample and a 1-sample overlap.
+
+    Set return_diagnostics=True to also get the rejection rate. Default is
+    False so existing callers keep working unchanged.
+    """
     events = mne.make_fixed_length_events(raw, duration=epoch_length_sec)
-    epochs = mne.Epochs(raw, events, tmin=0, tmax=epoch_length_sec, baseline=None, preload=True, verbose=False)
+    sfreq = float(raw.info["sfreq"])
+
+    reject = flat = None
+    if reject_uv is not None:
+        reject = dict(eeg=reject_uv)
+        flat = dict(eeg=FLAT_THRESHOLD_V)
+
+    epochs = mne.Epochs(
+        raw, events, tmin=0, tmax=epoch_length_sec - 1.0 / sfreq,
+        baseline=None, preload=True, reject=reject, flat=flat, verbose=False,
+    )
+
+    n_total, n_kept = len(events), len(epochs)
+    rate = 1.0 - (n_kept / n_total) if n_total else 0.0
+
+    if n_kept == 0:
+        warnings.warn(
+            f"ALL {n_total} epochs rejected at {reject_uv*1e6:.0f} uV peak-to-peak. "
+            "This recording is unusable at this threshold -- inspect it before "
+            "including the subject."
+        )
+    elif rate > HIGH_REJECTION_RATE_WARN:
+        warnings.warn(
+            f"High rejection rate: {rate:.1%} ({n_total - n_kept}/{n_total} epochs). "
+            "Flag this subject for manual QC."
+        )
+
+    if return_diagnostics:
+        return epochs, {"n_events": n_total, "n_kept": n_kept,
+                        "rejection_rate": float(rate),
+                        "reject_uv": reject_uv}
     return epochs
 
 
@@ -205,18 +386,20 @@ def preprocess_subject(eoec_filepath: str, vcpt_filepath: str | None = None) -> 
 
     raw_eoec = load_raw(eoec_filepath)
     raw_eoec = filter_raw(raw_eoec)
-    raw_eoec = remove_artifacts_ica(raw_eoec)
+    raw_eoec, ica_diag_eoec = remove_artifacts_ica(raw_eoec)
+    result["ica_eoec"] = ica_diag_eoec
     split = split_eoec_by_alpha(raw_eoec)
-    result["ec_epochs"] = epoch_signal(split["ec"])
-    result["eo_epochs"] = epoch_signal(split["eo"])
+    result["ec_epochs"], result["reject_ec"] = epoch_signal(split["ec"], return_diagnostics=True)
+    result["eo_epochs"], result["reject_eo"] = epoch_signal(split["eo"], return_diagnostics=True)
     result["alpha_ratio"] = split["alpha_ratio"]
     result["eoec_ambiguous"] = split["ambiguous"]
 
     if vcpt_filepath:
         raw_vcpt = load_raw(vcpt_filepath)
         raw_vcpt = filter_raw(raw_vcpt)
-        raw_vcpt = remove_artifacts_ica(raw_vcpt)
-        result["vcpt_epochs"] = epoch_signal(raw_vcpt)
+        raw_vcpt, ica_diag_vcpt = remove_artifacts_ica(raw_vcpt)
+        result["ica_vcpt"] = ica_diag_vcpt
+        result["vcpt_epochs"], result["reject_vcpt"] = epoch_signal(raw_vcpt, return_diagnostics=True)
         result["vcpt_behavioral_proxy"] = extract_vcpt_behavioral_proxy(raw_vcpt)
 
     return result

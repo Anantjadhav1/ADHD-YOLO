@@ -178,3 +178,88 @@ Verified: patched logic reproduces the `trapz/1000` column from `verify_tbr.py` 
 **Still outstanding from the previous session, unchanged:** the duplicate-subject-ID check on the 109 EOEC files has still not been run, and `PROJECT.md` has still not been recovered from git history. Both block the full-cohort run.
 
 - **Next:** (1) run the duplicate-ID check; (2) recover `PROJECT.md`; (3) `fix/ica-artifact-rejection` — promoted above the augmentation and layout fixes now that the movement confound is confirmed relevant to this population; (4) TBR on the continuous segment rather than epochs; (5) expand the classical feature set, starting with aperiodic exponent and IAF since the literature names both as the specific mechanisms TBR misses.
+
+
+### 2026-08-24b — ICA no-op fixed; artifact rejection now actually exists
+
+Branch: `fix/ica-artifact-rejection`. Promoted above the augmentation and image-layout fixes: the movement confound named in the TBR literature (ADHD children move more than controls) means missing artifact rejection is differential between the groups, not random noise. That is a threat to validity, not cleanup.
+
+**`remove_artifacts_ica()` was a no-op.** It fit an ICA and then called `ica.apply()` with an empty `exclude` list, which reconstructs the signal bit-identically — a full ICA fit per recording (~206 across the cohort) for zero change in output. Every image and every feature produced before this commit came from unrejected data.
+
+**Now does three things it didn't:**
+- **EOG detection** via `find_bads_eog` using Fp1/Fp2 as proxies. No real EOG channel exists (X1/X2 confirmed dead). Blinks dominate the frontopolar channels so the correlation is driven by ocular activity, but these ARE real EEG channels, so some genuine frontopolar brain signal is removed with them. Acceptable because TBR is computed at F3/F4/Fz — **must be stated as a limitation in the methods section.**
+- **Muscle detection** via `find_bads_muscle`. Relevant specifically here: EMG contaminates 20 Hz and up, which is the beta band, the DENOMINATOR of TBR. Blinks contaminate delta/theta, the numerator. Artifact was hitting the primary biomarker from both directions.
+- **Fits on a 1 Hz high-passed copy**, applies the solution to the 0.5 Hz data. Low-frequency drift degrades ICA decomposition; standard MNE practice, not a deviation.
+
+**`epoch_signal()` had no rejection at all.** Added peak-to-peak rejection at 150 uV plus a flat-channel threshold. `reject_uv=None` restores the old behaviour for comparison. Also fixed `tmax`: was `epoch_length`, which yields one extra sample and a 1-sample overlap between consecutive epochs; now `epoch_length - 1/sfreq`.
+
+**Design decisions worth recording:**
+- Both functions **return diagnostics** rather than cleaning silently. A recording where half the components were rejected, or a third of epochs dropped, should surface — not quietly contribute fewer images. Consistent with the project's flag-don't-silently-trust norm from the EC/EO ambiguity handling.
+- Warnings fire at >30% rejection and at zero surviving epochs. Neither raises — one bad subject must not kill a 103-subject batch.
+- Detection failures are caught and warned, returning uncleaned data rather than propagating.
+- `preprocess_subject()` now threads `ica_eoec`, `ica_vcpt`, `reject_ec`, `reject_eo`, `reject_vcpt` into its result dict.
+- Chose a fixed 150 uV threshold over a per-recording percentile. A percentile guarantees dropping a fixed fraction regardless of quality — losing good data on clean recordings and keeping bad data on poor ones. A fixed threshold plus a reported rejection rate is honest and defensible.
+- `autoreject` was considered and deferred: it adds a dependency, is slow, and the simpler threshold is reportable in a methods section without further explanation. Revisit if rejection rates come out extreme.
+
+**Consequences to handle before the full run:**
+- **Every image and classical feature generated so far is now stale.** They came from unrejected data. Both must be regenerated after this lands.
+- Epoch counts per subject will drop, and by different amounts per subject. The VCPT-dominance figure (65% of all images) will shift and needs re-measuring.
+- Subjects with high rejection rates need a QC decision: include, exclude, or flag. No policy exists yet — needs one before Phase 2.
+- TBR values will change. The 2026-08-23 measurements (group means 1.9-2.9, AUC 0.43/0.49/0.55) were computed on unrejected data and must be re-run. If TBR separation changes materially once artifact is removed, that is itself a finding worth reporting — the literature specifically raises movement artifact as a source of biased TBR estimates.
+
+**Still outstanding, unchanged across three sessions:** the duplicate-subject-ID check on the 109 EOEC files, and recovering `PROJECT.md` from git history. Both block the full-cohort run and are one command each.
+
+- **Next:** (1) re-run the 20-subject TBR check on ARTIFACT-REJECTED data and compare against the 2026-08-23 numbers; (2) duplicate-ID check; (3) recover `PROJECT.md`; (4) `fix/yolo-augmentation-flags`; (5) `fix/topomap-grid-layout`.
+
+
+### 2026-08-24c — artifact rejection thresholds set from measured data, not convention
+
+Completes `fix/ica-artifact-rejection`. Both thresholds in the previous commit were guesses from literature; both were wrong, and measuring produced a finding.
+
+**REJECT_PEAK_TO_PEAK_V: 150 -> 250 uV.** 150 uV rejected 100% of epochs on C09090107. Measuring the actual distribution showed why:
+- Pre-ICA the worst-channel median was 260.7 uV against a pooled median of 142.3 — a 2x gap, i.e. driven by a subset of channels. Post-ICA that gap is gone (per-channel medians 33-103 uV, uniform), confirming it was blinks and that ICA removed them.
+- The highest post-ICA channels are O2 (103), O1 (91), Pz (85) — occipital/parietal. That is genuine eyes-closed alpha, not artifact.
+- Worst-channel p90 = 167 uV, p95 = 544 uV. A sharp discontinuity, so real artifact begins past ~500. 250 uV sits in that gap and keeps 92% of epochs.
+- **A 150 uV threshold would have been systematically biased**, preferentially rejecting high-alpha epochs — i.e. discarding the EC condition's dominant physiological feature. Worth remembering: a threshold that cuts into the bulk of a distribution rather than its tail is rejecting signal, not noise.
+
+**MUSCLE_THRESHOLD: 0.5 (MNE default) -> 0.9, plus a hard cap.** Built `training/sweep_muscle_threshold.py` to measure the parameter's effect rather than guess again. Swept 0.5-1.0 across 2 ADHD + 2 Control:
+
+| Subject | TBR_EC range | Swing | Components excluded @0.5 |
+|---|---|---|---|
+| F08080102 (ADHD) | 2.356 - 2.551 | 8.3% | 5 of 19 |
+| F09080101 (ADHD) | 0.517 - 2.126 | **311%** | **14 of 19** |
+| C09090107 (Control) | 1.176 - 1.314 | 11.8% | 7 of 19 |
+| C09091102 (Control) | 1.838 - 2.342 | 27.4% | 6 of 19 |
+
+Three findings from this:
+
+1. **The effect is not directionally consistent.** Removing more "muscle" RAISES TBR in three subjects and LOWERS it in one. So it is not cleanly stripping beta — it is a per-subject perturbation with no consistent sign.
+2. **F09080101 is a broken recording, not a threshold problem.** 14 of 19 components flagged as muscle at the default, still 9 at 0.9. Its decomposition is dominated by high-frequency structure. Needs manual inspection before inclusion.
+3. **EOG detection is completely stable** — exactly 2 components for every subject at every threshold. Blink detection works; muscle detection is the unreliable half.
+
+Chose 0.9 (3 of 4 subjects inside the 1-4 target) plus `MAX_ICA_COMPONENTS_EXCLUDED = 5`. The cap is the important part: if detection wants more than a quarter of the decomposition, flag the subject rather than silently reconstructing from a handful of components. EOG is never capped; muscle is capped by score, strongest kept. `diagnostics["capped"]` records when it fired, for the audit log. Threshold 1.0 was rejected — all four subjects land in range there, but only because muscle detection is entirely disabled.
+
+**This is a pipeline-wide issue, not a TBR issue.** The same ICA cleaning feeds the scalograms and topomaps. F09080101's images would have been built from 5 surviving components out of 19.
+
+**Third measured sensitivity on the same feature.** TBR now has three documented dependencies on implementation choice:
+
+| Choice | Shift in TBR |
+|---|---|
+| mean vs integral band power | 4.88x |
+| 751 vs 750 samples per epoch | 27% |
+| ICA muscle threshold | 8-311% |
+
+The middle one was discovered accidentally: the `tmax` off-by-one fix changed epochs from 751 to 750 samples, moving df from 0.6658 to 0.6667 Hz. That tiny change made FFT bins land exactly on the band edges (4.0/8.0/12.0/30.0) instead of straddling them — theta span went from 3.33 Hz to the full 4.00 Hz. **A one-sample change in epoch length moved the primary biomarker by 27%.**
+
+General rule adopted: choose `nperseg` so `fs/nperseg` divides evenly into the band edges. At 500 Hz, 750/1000/2000 all work; 751 does not.
+
+Taken together this is an independent replication, on our own data, of the 2020 five-algorithm null and the 2026 multiverse analysis. **Belongs in the discussion section** — it is stronger evidence than citing theirs, because it is ours.
+
+**Open decisions before the full run:**
+- No QC policy yet for capped/high-rejection subjects. Include, exclude, or flag? Needed before Phase 2.
+- F09080101 specifically needs manual inspection.
+- All images and classical features remain stale pending regeneration.
+
+**Still outstanding across four sessions:** duplicate-subject-ID check on the 109 EOEC files; recovering `PROJECT.md` from git history. One command each, both blocking the full-cohort run.
+
+- **Next:** (1) duplicate-ID check and `PROJECT.md` recovery — these keep slipping and block everything; (2) re-run the 20-subject TBR check on artifact-rejected data; (3) `fix/yolo-augmentation-flags`; (4) `fix/topomap-grid-layout`.

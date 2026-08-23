@@ -31,7 +31,7 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | 🟡 Built and verified on real subjects, but three correctness issues found on 2026-08-23 (see below) must be resolved before generating images at scale |
+| 1 — Data pipeline | 🟡 Artifact rejection and TBR band power now fixed; scalogram normalization still open. **All previously generated images and features are stale** and must be regenerated |
 | 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built; **CNN↔fusion plumbing is missing**; classical half currently at chance; real full-scale run pending |
 | 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
 | 4 — Literature review + paper writing | ⬜ Not started |
@@ -59,8 +59,9 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 
 These were found by running code against real data, not by reading it. All are unresolved as of this commit.
 
-1. **`remove_artifacts_ica()` is a no-op.** `ica.apply()` is called with an empty `exclude` list, which reconstructs the signal bit-identically. **There is currently zero artifact rejection anywhere in the pipeline** — no ICA rejection, no epoch amplitude threshold — while costing a full ICA fit per recording. Every image and every feature produced so far comes from unrejected data.
-2. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
+1. **All generated images and classical features are stale.** They were produced before artifact rejection existed, and must be regenerated. Epoch counts per subject will drop by differing amounts, so the condition balance needs re-measuring too.
+2. **No QC policy for problem subjects.** The pipeline now warns above 30% epoch rejection and flags subjects where ICA component removal hits the cap, but there's no rule for whether to include, exclude, or flag them. **F09080101 specifically needs manual inspection** — muscle detection flags 14 of its 19 components at MNE's default threshold, meaning its decomposition is dominated by high-frequency structure. Needs deciding before Phase 2.
+3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
 4. **Missing Phase 2 plumbing.** `train_yolo_cls.run_cv()` computes per-subject out-of-fold probabilities and discards them, but `fusion_classifier.run_fusion_cv()` requires them as input. No code path connects the two halves.
 5. **The held-out test split is never evaluated.** `run_cv` filters it out and no `evaluate_on_test()` exists — the two-stage design in `subject_split.py` has no consumer.
 6. **CV accuracy will be optimistically biased.** Ultralytics selects `best.pt` by accuracy on the val fold, and evaluation then scores on that same fold.
@@ -83,7 +84,9 @@ These were found by running code against real data, not by reading it. All are u
 13. **A single-class CV fold** crashed logistic regression; now skipped with a warning.
 14. **`NaN` is not valid JSON** — would have made every `/predict` request return 500. Found via a real HTTP request through `TestClient`, not by calling the Python function directly.
 15. **Band power was computed as the mean of the PSD, not its integral** — inflating TBR by 4.88× on real subjects. Fixed with `np.trapezoid` (note: `np.trapz` was *removed* in NumPy 2.0, so the naive fix raises `AttributeError` on this environment).
-16. **`parse_filename`'s regex matched zero real files** — it required underscores in the date/time; the dataset uses dots. Would have raised on the first file of the 103-subject run. The docstring documented the wrong convention, which is how it survived. Fixed to accept `[._-]`.
+16. **Both artifact thresholds were guesses from literature, and both were wrong.** 150 µV peak-to-peak rejected 100% of epochs; measuring the actual post-ICA distribution showed the bulk ends near 170 µV with real artifact past 500, so 250 µV is the defensible choice. MNE's default muscle-detection threshold (0.5) removed 14 of 19 ICA components on one subject. Fixed by measuring rather than re-guessing (`training/sweep_muscle_threshold.py`).
+17. **`remove_artifacts_ica()` was a no-op** — `ica.apply()` with an empty exclude list reconstructs the signal bit-identically, so a full ICA fit per recording changed nothing. Combined with a missing `reject` parameter in epoching, the pipeline had *zero* artifact rejection. Fixed with EOG detection (Fp1/Fp2 proxies), muscle detection, and peak-to-peak epoch rejection.
+18. **`parse_filename`'s regex matched zero real files** — it required underscores in the date/time; the dataset uses dots. Would have raised on the first file of the 103-subject run. The docstring documented the wrong convention, which is how it survived. Fixed to accept `[._-]`.
 
 None of this was visible from reading the paper or the dataset README — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
 
@@ -116,6 +119,20 @@ All three CIs contain 0.5. **This overturns the earlier 5-subject observation** 
 Caveats in both directions: n=20 is small and the CIs are wide, so this is *no evidence of separation* rather than *evidence of no separation*.
 
 **What this means for the project.** The negative result is a finding with citations, not an absence of results — and it sharpens the comparison rather than weakening it. If the CNN succeeds where the classical marker fails, the interesting question becomes *what it is seeing*, which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. The literature also names two specific confounds that point directly at better features: **aperiodic exponent/offset** (a slope difference shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends) and **individual alpha peak frequency** (a child with IAF at 7-8 Hz has genuine alpha power inside the theta window). Both are computable from data already in hand.
+
+**TBR is unstable under reasonable methodological variation — measured, not assumed.** Three implementation choices, each moving the same feature on the same data:
+
+| Choice | Shift in TBR |
+|---|---|
+| Mean vs. integral band power | **4.88×** |
+| 751 vs. 750 samples per epoch | **27%** |
+| ICA muscle-detection threshold | **8–311%** |
+
+The middle one was accidental: fixing a one-sample `tmax` off-by-one changed `df` from 0.6658 to 0.6667 Hz, which made FFT bins land exactly on the band edges (4.0/8.0/12.0/30.0) rather than straddling them. Theta span went from 3.33 Hz to the full 4.00 Hz. *A one-sample change in epoch length moved the primary biomarker by 27%.*
+
+The third is worse than a magnitude shift — the muscle threshold moves TBR in **inconsistent directions** across subjects (up in three, down in one), so it isn't cleanly stripping beta; it's a per-subject perturbation with no consistent sign.
+
+This is an independent replication, on this dataset, of the 2020 five-algorithm null and the 2026 multiverse analysis. It is stronger evidence than citing theirs.
 
 **A useful side-effect:** EC > EO holds in 15/20 subjects, the physiologically expected direction. The five that don't (`F09081100`, `F09101156`, `F10011103`, `C10011101`, `C10020106`) are candidates for a flipped EC/EO assignment — suggesting a cheap QC rule where TBR direction must agree with `alpha_ratio`.
 
@@ -151,6 +168,7 @@ adhd-yolo/
 ├── training/
 │   ├── classical_features.py        # TBR (theta/beta ratio) biomarker computation
 │   ├── verify_tbr.py                # diagnostic: TBR variant comparison (read-only)
+│   ├── sweep_muscle_threshold.py    # diagnostic: ICA muscle threshold sensitivity
 │   ├── train_yolo_cls.py            # yolov8n-cls training + subject-level evaluation
 │   ├── fusion_classifier.py         # CNN + classical fusion meta-classifier
 │   └── significance_test.py         # bootstrap CI vs. published baselines
@@ -200,7 +218,8 @@ Health check: `http://localhost:8000/health`
 
 - Dataset is ~103 subjects — small for a deep classifier; subject-wise validation and transfer learning are mandatory, not optional.
 - **The classical biomarker currently at the centre of the fusion design (TBR) does not separate the groups** on the 20 subjects tested (all AUC CIs contain 0.5). Sample size is small, so this is absence of evidence rather than evidence of absence — but the fusion path needs more than three features to be viable.
-- **There is currently no artifact rejection in the pipeline** — the ICA step is a no-op and no epoch amplitude threshold is applied. All results and images to date come from unrejected data. This is a *named threat to validity* for this population specifically: the literature reports that children with ADHD move more than controls, so artifact contamination is differential between the groups rather than random.
+- **Blink removal uses Fp1/Fp2 as EOG proxies**, since no real EOG channel exists in this dataset (X1/X2 are confirmed dead). Those are genuine EEG channels, so some real frontopolar brain activity is removed alongside ocular artifact. Acceptable here because TBR is computed at F3/F4/Fz, but it is a stated limitation.
+- **All TBR figures reported below predate artifact rejection.** They were computed on unrejected data and need re-running. Since the literature names movement artifact as a source of biased TBR estimates, a material change after rejection would itself be a finding.
 - P300 latency/amplitude and per-condition behavioral features are unavailable pending clarification from the dataset source.
 - **The per-frequency-row normalization applied to scalograms removes absolute band-power relationships**, which means the theta/beta ratio is not recoverable from the scalogram images by design. This was a fix for a visual problem that has a signal-content cost, and needs revisiting.
 - Grad-CAM and the clinical-plausibility check have not been run against a real trained model.
