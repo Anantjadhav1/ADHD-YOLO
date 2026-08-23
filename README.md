@@ -2,7 +2,7 @@
 
 YOLO-based image classification framework for pediatric ADHD screening from EEG/ERP signals — converted to 2D scalograms, topographic heatmaps, and EC/EO coherence maps, classified with `yolov8n-cls`, explained with Grad-CAM, and fused with classical EEG biomarkers via a logistic-regression meta-classifier. Built as both a research project (thesis-grade methodology) and an engineering portfolio piece (FastAPI backend, Docker, AWS deployment).
 
-Full methodology, decisions, and roadmap: see `PROJECT.md`. Session-by-session log: see `PROGRESS.md`. This file is the high-level orientation — what the project is, where it stands, and what's next.
+Full methodology, decisions, and roadmap: see `PROJECT.md`. Session-by-session log: see `PROGRESS.md`. Background science — EEG, spectral analysis, the ADHD biomarker literature, evaluation methodology: see `docs/STUDY_GUIDE.md`. This file is the high-level orientation — what the project is, where it stands, and what's next.
 
 > **`PROJECT.md` is currently broken.** The file in the repo is a truncated copy of `PROGRESS.md`, not the methodology document. Every module cites sections of it (`sec 4 step 3`, `sec 5a`, `sec 6 Phase 2`) that don't exist in the file as committed. Recover it from git history before relying on any cross-reference. Tracked in `PROGRESS.md` (2026-08-23).
 
@@ -60,8 +60,7 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 These were found by running code against real data, not by reading it. All are unresolved as of this commit.
 
 1. **`remove_artifacts_ica()` is a no-op.** `ica.apply()` is called with an empty `exclude` list, which reconstructs the signal bit-identically. **There is currently zero artifact rejection anywhere in the pipeline** — no ICA rejection, no epoch amplitude threshold — while costing a full ICA fit per recording. Every image and every feature produced so far comes from unrejected data.
-2. **`classical_features.compute_tbr()` uses `.mean()` where band power needs an integral** — confirmed to inflate TBR by 4.88× on real subjects. Patch understood, not yet applied.
-3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution.** `nperseg=1000` silently clamps to 751 samples. TBR is a subject-level summary and should be computed on the continuous segment.
+2. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
 4. **Missing Phase 2 plumbing.** `train_yolo_cls.run_cv()` computes per-subject out-of-fold probabilities and discards them, but `fusion_classifier.run_fusion_cv()` requires them as input. No code path connects the two halves.
 5. **The held-out test split is never evaluated.** `run_cv` filters it out and no `evaluate_on_test()` exists — the two-stage design in `subject_split.py` has no consumer.
 6. **CV accuracy will be optimistically biased.** Ultralytics selects `best.pt` by accuracy on the val fold, and evaluation then scores on that same fold.
@@ -83,7 +82,8 @@ These were found by running code against real data, not by reading it. All are u
 12. **A column-collision bug in the fusion classifier** — re-merging `split` produced `split_x`/`split_y`.
 13. **A single-class CV fold** crashed logistic regression; now skipped with a warning.
 14. **`NaN` is not valid JSON** — would have made every `/predict` request return 500. Found via a real HTTP request through `TestClient`, not by calling the Python function directly.
-15. **`parse_filename`'s regex matched zero real files** — it required underscores in the date/time; the dataset uses dots. Would have raised on the first file of the 103-subject run. The docstring documented the wrong convention, which is how it survived. Fixed to accept `[._-]`.
+15. **Band power was computed as the mean of the PSD, not its integral** — inflating TBR by 4.88× on real subjects. Fixed with `np.trapezoid` (note: `np.trapz` was *removed* in NumPy 2.0, so the naive fix raises `AttributeError` on this environment).
+16. **`parse_filename`'s regex matched zero real files** — it required underscores in the date/time; the dataset uses dots. Would have raised on the first file of the 103-subject run. The docstring documented the wrong convention, which is how it survived. Fixed to accept `[._-]`.
 
 None of this was visible from reading the paper or the dataset README — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
 
@@ -105,7 +105,17 @@ Tested on **20 subjects (10 ADHD / 10 Control)**, not the 5 used previously.
 
 All three CIs contain 0.5. **This overturns the earlier 5-subject observation** that TBR was "consistently higher for ADHD than Control across every condition" — that was noise, and it was reported as an encouraging signal in two prior documents. Correcting the units does not change separation (AUC moves 0.420 → 0.430 on EC), so the fix is about correctness and comparability to literature, not accuracy.
 
-Caveats in both directions: n=20 is small and the CIs are wide, so this is *no evidence of separation* rather than *evidence of no separation*. But it does mean the classical half of the fusion classifier currently contributes nothing, and expanding beyond three features is now the critical path for the "classical + fusion beats the CNN" thesis rather than an optional enhancement.
+**This replicates the current scientific consensus.** A literature review (2026-08-24) found the negative result is well established, not an anomaly of this dataset:
+
+- **Arns, Conners & Kraemer (2013)** — meta-analysis of 9 studies (1253 ADHD / 517 non-ADHD). The group difference *shrank across publication years*, because TBR was rising in the **control** groups. Concluded TBR is not a reliable diagnostic measure.
+- **(2020, iSPOT-A/ICAN)** — five different spectral-analysis algorithms computed TBR across two multi-centre clinical datasets. They produced significantly different values, and **none distinguished ADHD from controls.** This is essentially the experiment `verify_tbr.py` runs, published on far more subjects.
+- **Arns et al. (2024)**, N=417 — "TBR has no diagnostic value for ADHD."
+- **(2026) eLife multiverse analysis**, N=1499+381 — identifies **individual alpha peak frequency and aperiodic neural activity** as the mechanisms that limit TBR's value.
+- **Coolidge et al. (2007)** — separating ADHD from *other* psychological disorders: sensitivity 50%, specificity 36%.
+
+Caveats in both directions: n=20 is small and the CIs are wide, so this is *no evidence of separation* rather than *evidence of no separation*.
+
+**What this means for the project.** The negative result is a finding with citations, not an absence of results — and it sharpens the comparison rather than weakening it. If the CNN succeeds where the classical marker fails, the interesting question becomes *what it is seeing*, which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. The literature also names two specific confounds that point directly at better features: **aperiodic exponent/offset** (a slope difference shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends) and **individual alpha peak frequency** (a child with IAF at 7-8 Hz has genuine alpha power inside the theta window). Both are computable from data already in hand.
 
 **A useful side-effect:** EC > EO holds in 15/20 subjects, the physiologically expected direction. The five that don't (`F09081100`, `F09101156`, `F10011103`, `C10011101`, `C10020106`) are candidates for a flipped EC/EO assignment — suggesting a cheap QC rule where TBR direction must agree with `alpha_ratio`.
 
@@ -152,6 +162,7 @@ adhd-yolo/
 ├── frontend/                        # dashboard (Phase 5)
 ├── notebooks/                       # exploratory work
 ├── docs/
+│   ├── STUDY_GUIDE.md               # the science: EEG, spectral analysis, ML, stats
 │   └── jira_board.md                # epic/story breakdown
 └── docker-compose.yml               # local dev, portable to EC2 later
 ```
@@ -189,7 +200,7 @@ Health check: `http://localhost:8000/health`
 
 - Dataset is ~103 subjects — small for a deep classifier; subject-wise validation and transfer learning are mandatory, not optional.
 - **The classical biomarker currently at the centre of the fusion design (TBR) does not separate the groups** on the 20 subjects tested (all AUC CIs contain 0.5). Sample size is small, so this is absence of evidence rather than evidence of absence — but the fusion path needs more than three features to be viable.
-- **There is currently no artifact rejection in the pipeline** — the ICA step is a no-op and no epoch amplitude threshold is applied. All results and images to date come from unrejected data.
+- **There is currently no artifact rejection in the pipeline** — the ICA step is a no-op and no epoch amplitude threshold is applied. All results and images to date come from unrejected data. This is a *named threat to validity* for this population specifically: the literature reports that children with ADHD move more than controls, so artifact contamination is differential between the groups rather than random.
 - P300 latency/amplitude and per-condition behavioral features are unavailable pending clarification from the dataset source.
 - **The per-frequency-row normalization applied to scalograms removes absolute band-power relationships**, which means the theta/beta ratio is not recoverable from the scalogram images by design. This was a fix for a visual problem that has a signal-content cost, and needs revisiting.
 - Grad-CAM and the clinical-plausibility check have not been run against a real trained model.

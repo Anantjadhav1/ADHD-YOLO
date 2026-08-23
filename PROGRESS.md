@@ -142,3 +142,39 @@ All three CIs contain 0.5. The 5-subject signal was noise. Recorded here rather 
 **Not changed this session** (deliberately — verify first, patch second): `classical_features.py` still uses `.mean()`. The patch is understood and small, but should land together with the move off epochs onto the continuous signal rather than as two separate edits.
 
 - **Next:** (1) run the duplicate-subject-ID check on the 109 files; (2) recover `PROJECT.md` from git history; (3) patch `classical_features.py` — trapz + continuous-signal PSD; (4) expand the classical feature set beyond TBR (relative band power per channel, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries) — now critical path, not optional; (5) resolve the ICA no-op before any real training run, since every image and every feature currently comes from unrejected data.
+
+
+### 2026-08-24 — TBR band power fixed to integral; literature review confirms the negative result
+
+Branch: `fix/tbr-band-power`. Implements the variant validated on 2026-08-23; adds no new hypothesis.
+
+**Changed `training/classical_features.py`:**
+- Added `_band_power()` — band power is now the INTEGRAL of the PSD across the band (`np.trapezoid`), not the mean. Returns NaN if a band holds fewer than 2 bins rather than silently returning a value derived from one sample.
+- `TBR_NPERSEG` 256 -> 1000 (clamped to epoch length, so 751 in practice). Frequency resolution 1.95 Hz -> 0.67 Hz; theta bins 2 -> 6.
+- Added a `np.trapezoid` shim. `np.trapz` was REMOVED in NumPy 2.0 and this environment runs NumPy 2.4, so the naive fix would have raised `AttributeError`.
+- Rewrote the module and function docstrings. The old module docstring asserted TBR was "the SINGLE HIGHEST-LEVERAGE item for accuracy" — contradicted by our own measurement. The old function docstring claimed TBR was computed "from the full recording's power spectrum (not per-epoch)", which was never true: it is computed from epoch PSDs averaged together, and the epoch length caps resolution.
+
+Verified: patched logic reproduces the `trapz/1000` column from `verify_tbr.py` exactly (6θ/27β bins on real data). Known-answer test on a flat spectrum returns theta=4.0, beta=18.0, ratio=0.2222 = 4/18, as it must.
+
+**Literature review — the negative TBR result is the current consensus, not an anomaly.** Searched properly for the first time; should have been done before treating a 5-subject signal as encouraging:
+
+- **Arns, Conners & Kraemer (2013)**, *J Atten Disord* 17(5):374-383 — meta-analysis, 9 studies, 1253 ADHD / 517 non-ADHD, TBR at Cz eyes-open. Grand-mean ES 0.75 (6-13y), 0.62 (6-18y), but significant heterogeneity means these are overestimates. The group difference **shrank across publication years because TBR rose in the CONTROL groups**. Conclusion: excessive TBR is not a reliable diagnostic measure; may have prognostic value in a subgroup.
+- **Arns et al. (2016)**, *JCPP* editorial — "How should child psychologists and psychiatrists interpret FDA device approval? Caveat emptor", written in response to the 2013 FDA clearance of the NEBA device.
+- **(2020)** *Appl Psychophysiol Biofeedback* — five different spectral-analysis algorithms applied to TBR across iSPOT-A and ICAN. The methods produced significantly different TBR values and **none distinguished ADHD from controls**. This is essentially our `verify_tbr.py` experiment, published, on far more subjects.
+- **Arns et al. (2024)**, *Appl Psychophysiol Biofeedback*, N=417 — subtyping meta-analysis. Grand-mean effect sizes -0.212 < d < 0.218, non-significant. "TBR has no diagnostic value for ADHD."
+- **(2026)** *eLife* multiverse analysis, N=1499 + 381 — varied every reasonable methodological choice. **Individual alpha peak frequency and aperiodic neural activity shape TBR estimates, limiting their value as a biomarker.**
+- **Coolidge et al. (2007)** — TBR separating ADHD from OTHER psychological disorders (the clinically real task): sensitivity 50%, specificity 36%.
+
+**Two named mechanisms, both actionable:**
+1. **Slow alpha contaminating theta.** Alpha peak frequency rises with age; a child with IAF at 7-8 Hz has genuine alpha power inside the 4-8 Hz theta window, inflating TBR with no excess theta. Fix: compute individual alpha peak frequency per subject, use it as a feature, and optionally define theta relative to each child's own alpha rather than fixed edges.
+2. **Aperiodic (1/f) activity.** A difference in spectral slope shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends. Fix: fit `specparam`/FOOOF, use exponent and offset as features.
+
+**A confound now confirmed as live in this pipeline:** the literature specifically notes children with ADHD move more than controls, which biases spectral estimates. With ICA a no-op and no epoch rejection, this confound is fully active AND differential between our groups. This moves `fix/ica-artifact-rejection` up in priority — it is not cleanup, it is a named threat to validity.
+
+**Reframing for the paper:** the negative result is a finding with citations, not an absence of results. If the CNN succeeds where the classical marker fails, the interesting question becomes what it is seeing — which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. This strengthens the thesis rather than weakening it.
+
+**Added `docs/STUDY_GUIDE.md`** — 12 modules covering EEG physiology, spectral analysis, the ADHD/TBR literature, preprocessing, wavelets, connectivity, image conversion, CNNs, evaluation methodology, small-sample statistics, and interpretability, with a 30-question self-test.
+
+**Still outstanding from the previous session, unchanged:** the duplicate-subject-ID check on the 109 EOEC files has still not been run, and `PROJECT.md` has still not been recovered from git history. Both block the full-cohort run.
+
+- **Next:** (1) run the duplicate-ID check; (2) recover `PROJECT.md`; (3) `fix/ica-artifact-rejection` — promoted above the augmentation and layout fixes now that the movement confound is confirmed relevant to this population; (4) TBR on the continuous segment rather than epochs; (5) expand the classical feature set, starting with aperiodic exponent and IAF since the literature names both as the specific mechanisms TBR misses.
