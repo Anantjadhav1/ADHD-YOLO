@@ -10,7 +10,7 @@ import os
 import pandas as pd
 
 from data_pipeline import subject_split
-from data_pipeline.classical_features import compute_classical_features
+from training.classical_features import compute_classical_features
 from data_pipeline.preprocessing import preprocess_subject
 
 

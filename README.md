@@ -48,6 +48,8 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 
 All data-pipeline, classical-feature, and training code above has been **run end-to-end on real subject files**, not synthetic test data. The interpretability code has been built and internally bug-tested but not yet run against a real trained model, since that depends on Phase 2's full run.
 
+- **`training/significance_test.py`** — bootstrap confidence interval on subject-level accuracy vs. the 75.8%/84.5% baselines, since a McNemar's test isn't possible without the paper's paired per-subject predictions.
+
 ### Real problems found and solved while building this
 
 1. **No channel position data in the raw files** — broke topomap plotting outright. Fixed by attaching a standard 10-20 montage on load.
