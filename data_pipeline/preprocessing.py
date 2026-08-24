@@ -147,7 +147,20 @@ def load_raw(filepath: str) -> mne.io.Raw:
     """Load a raw recording, drop the confirmed-dead X1/X2 channels, and
     attach a standard 10-20 montage — the files themselves carry no channel
     position data, which topomap plotting needs downstream."""
-    raw = mne.io.read_raw_edf(filepath, preload=True, verbose=False)
+    with warnings.catch_warnings():
+        # These EDFs declare per-channel highpass/lowpass values that are not
+        # all identical, so MNE warns twice per file that it is storing the
+        # most conservative of each. That is the correct behaviour and there is
+        # nothing to act on -- but it is 4 lines per subject, and across 108
+        # subjects it buries the warnings that DO matter (rejection rates, ICA
+        # caps, EC/EO ambiguity). Suppressed by exact message so anything else
+        # RuntimeWarning still surfaces.
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*Channels contain different (highpass|lowpass) filters.*",
+            category=RuntimeWarning,
+        )
+        raw = mne.io.read_raw_edf(filepath, preload=True, verbose=False)
     drop = [ch for ch in DEAD_CHANNELS if ch in raw.ch_names]
     if drop:
         raw.drop_channels(drop)
