@@ -26,6 +26,7 @@ reading of the paper:
 
 import re
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 
 import mne
@@ -331,19 +332,37 @@ def epoch_signal(raw: mne.io.Raw, epoch_length_sec: float = EPOCH_LENGTH_SEC,
         reject = dict(eeg=reject_uv)
         flat = dict(eeg=FLAT_THRESHOLD_V)
 
+    # Restrict to the real 19 EEG channels, the same way filter_raw() and
+    # remove_artifacts_ica() already do. Without this, reject/flat are applied
+    # to every channel MNE types as eeg -- which includes LABEL, a digital
+    # marker channel that is constant by construction. `flat` drops an epoch if
+    # ANY channel falls below threshold, so a permanently-flat LABEL rejected
+    # 100% of epochs on 100% of subjects, and the pipeline could not produce a
+    # single image. LABEL stays on the Raw, which is what
+    # extract_vcpt_behavioral_proxy() reads -- it is only excluded from epochs.
+    eeg_picks = [ch for ch in CHANNELS_19 if ch in raw.ch_names]
+
     epochs = mne.Epochs(
         raw, events, tmin=0, tmax=epoch_length_sec - 1.0 / sfreq,
-        baseline=None, preload=True, reject=reject, flat=flat, verbose=False,
+        baseline=None, preload=True, reject=reject, flat=flat,
+        picks=eeg_picks, verbose=False,
     )
 
     n_total, n_kept = len(events), len(epochs)
     rate = 1.0 - (n_kept / n_total) if n_total else 0.0
 
     if n_kept == 0:
+        # Name the channel that actually caused the drops. The previous message
+        # blamed the peak-to-peak threshold unconditionally, which is what sent
+        # an earlier investigation after the threshold value while the real
+        # cause was a flat marker channel.
+        culprits = Counter(ch for entry in epochs.drop_log for ch in entry)
+        blamed = ", ".join(f"{ch} ({n})" for ch, n in culprits.most_common(3)) or "unknown"
         warnings.warn(
-            f"ALL {n_total} epochs rejected at {reject_uv*1e6:.0f} uV peak-to-peak. "
-            "This recording is unusable at this threshold -- inspect it before "
-            "including the subject."
+            f"ALL {n_total} epochs rejected (p2p > {reject_uv*1e6:.0f} uV or flat < "
+            f"{FLAT_THRESHOLD_V*1e6:.2f} uV). Channels responsible, most frequent first: "
+            f"{blamed}. This recording is unusable at these thresholds -- inspect it "
+            "before including the subject."
         )
     elif rate > HIGH_REJECTION_RATE_WARN:
         warnings.warn(
