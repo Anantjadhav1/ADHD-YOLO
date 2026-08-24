@@ -486,7 +486,7 @@ Two of the nine (§6M, §6N) have no branch and never will — they are a limita
 
 **Also fixed: the misleading warning.** It named the peak-to-peak threshold unconditionally, even when `flat` did the rejecting. It now reports both thresholds and, from `epochs.drop_log`, the channels actually responsible, most frequent first. A message that had said `LABEL (866)` would have ended this in one read instead of sending an investigation after the threshold value.
 
-**Verified on real data, not synthetic.** The two subjects that failed now produce images end to end — 64 PNGs across scalogram/topomap/coherence in the correct `representation/split/class` layout. Extended to 16 subjects spanning both groups as a generalisation check.
+**Verified on real data, not synthetic.** The two subjects that failed now produce images end to end — 64 PNGs across scalogram/topomap/coherence in the correct `representation/split/class` layout. Extended to a clean 8-subject run spanning both groups and four folds: **8/8 ok, 0 failed**, against 0/2 before the fix. The two subjects reporting `n_vcpt=0` are the ones with no VCPT file in the manifest, not failures.
 
 **A real rejection rate appeared once the fix landed**, which is the threshold doing its job rather than a flat channel masking it: C09110104 drops 69.2% of EC epochs and is flagged for QC, consistent with its measured distribution (250 µV keeps 30.8% of that subject's EC epochs). Subjects differ a lot here, and the QC policy question (`Open correctness issues` #2) now has real numbers attached to it rather than being hypothetical.
 
