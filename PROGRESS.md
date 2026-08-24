@@ -461,3 +461,35 @@ Two of the nine (§6M, §6N) have no branch and never will — they are a limita
 **A fourth false reference, flagged rather than fixed:** the README pointed at `docs/STUDY_GUIDE.md` in its second paragraph and in the repo-layout block. That file has never existed — `docs/` contains only `jira_board.md`. Writing the study guide is real work, not a docs correction, so both references now say it has not been written yet. Deleting them silently would have hidden a gap instead of recording it.
 
 - **Next:** unchanged — (1) `build_dataset.py` at cohort scale on the 108-subject manifest; (2) the reduced smoke run; (3) §6R inner-validation fix; (4) the Gamma/2×2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24k — the pipeline could not produce a single image, and the warning pointed at the wrong cause
+
+**`fix/label-channel-rejects-all-epochs` — done.** Found by finally pointing `build_dataset.py` at the real cohort, which is exactly the kind of thing that only surfaces by running against real data.
+
+**Symptom:** every subject failed. `preprocess_subject` returned empty `Epochs` objects, and image generation then died with `RuntimeError: epochs.adding, dropping, or reordering channels() can't run because this Epochs-object is empty`. Two subjects tried, two failures, 0 images. Phase 1 had never actually been run at cohort scale, so this had been latent the whole time.
+
+**The warning blamed the wrong thing, which is why it looked familiar.** It read `ALL 866 epochs rejected at 250 uV peak-to-peak` — the same shape as the 150 µV incident on 2026-08-23, so the obvious read was "the threshold is wrong again." It was not. Measuring the real peak-to-peak distribution the same way as last time:
+
+| Subject | Stage | median p2p | kept at 250 µV |
+|---|---|---|---|
+| F10101111 | post-ICA | 116 µV | **91.7%** |
+| C09110104 | post-ICA | 232 µV | **56.6%** |
+
+250 µV was keeping most epochs, not none. The p2p threshold was never the cause.
+
+**Real cause: the `LABEL` channel.** These files carry 22 channels — the 19 real EEG channels, X1/X2 (dead, dropped on load), and `LABEL`, a digital marker channel that is **constant by construction** (measured median p2p = 0.000 µV). MNE types it as `eeg`, and `epoch_signal` passed `flat=dict(eeg=1e-7)` with no `picks`. `flat` drops an epoch if **any** channel falls below threshold. A permanently-flat channel therefore rejected **100% of epochs on 100% of subjects**, forever.
+
+**This is the same channel as `Real problems found and solved` #9**, where LABEL was riding into the coherence calculation as a 20th channel. That was fixed at the coherence call site with an explicit `.pick()`. The same channel was still leaking into epoching, one function upstream, where it was fatal rather than merely wrong.
+
+**The fix follows the convention the module already had.** `filter_raw()` and `remove_artifacts_ica()` both restrict to `[ch for ch in CHANNELS_19 if ch in raw.ch_names]`. `epoch_signal()` was the one stage that did not, and now does. LABEL stays on the `Raw` — `extract_vcpt_behavioral_proxy()` reads it there — and is excluded only from epochs, which never needed it.
+
+**Also fixed: the misleading warning.** It named the peak-to-peak threshold unconditionally, even when `flat` did the rejecting. It now reports both thresholds and, from `epochs.drop_log`, the channels actually responsible, most frequent first. A message that had said `LABEL (866)` would have ended this in one read instead of sending an investigation after the threshold value.
+
+**Verified on real data, not synthetic.** The two subjects that failed now produce images end to end — 64 PNGs across scalogram/topomap/coherence in the correct `representation/split/class` layout. Extended to a clean 8-subject run spanning both groups and four folds: **8/8 ok, 0 failed**, against 0/2 before the fix. The two subjects reporting `n_vcpt=0` are the ones with no VCPT file in the manifest, not failures.
+
+**A real rejection rate appeared once the fix landed**, which is the threshold doing its job rather than a flat channel masking it: C09110104 drops 69.2% of EC epochs and is flagged for QC, consistent with its measured distribution (250 µV keeps 30.8% of that subject's EC epochs). Subjects differ a lot here, and the QC policy question (`Open correctness issues` #2) now has real numbers attached to it rather than being hypothetical.
+
+**Measured cost of a cohort run**, from two timed points (cap 5 → 37 s, cap 50 → 100 s on one subject): ~0.47 s per epoch (two images each) plus ~30 s fixed per subject for load/filter/ICA on two files. At the default cap of 300 that is roughly **6 minutes per subject, ~11 hours for all 108**, producing ~150,000 images. Not started here — that is a deliberate decision, not something to kick off as a side effect.
+
+- **Next:** (1) the cohort-scale `build_dataset.py` run, now genuinely unblocked; (2) the reduced smoke run against those real images; (3) §6R inner-validation fix; (4) the QC policy for high-rejection subjects, which now has measured rates behind it; (5) the Gamma/2×2 and Delta-coherence decisions; (6) `fix/scalogram-normalization` (§6H).
