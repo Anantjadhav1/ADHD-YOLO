@@ -322,3 +322,33 @@ Method used, and worth reusing: derive the list from the source rather than from
 **Environment note:** CPU-only, no NVIDIA GPU. At ~1,300 epoch-images per subject × 108 subjects ≈ 140,000 images, trained 5× over for 5-fold CV, a full 30-epoch run is days on CPU. **This promotes §6T (cap epochs per subject per condition) from optimization to prerequisite** — and it independently improves the VCPT-dominance problem (65% of images) rather than just being a speed hack.
 
 - **Next:** (1) `fix/topomap-grid-layout` (§6J) once the band decision is made; (2) §6T epoch capping — now a prerequisite for any CPU run, not an optimization; (3) `feat/save-oof-probabilities` (§6P) and `feat/evaluate-on-test` (§6Q), the two gaps that make Phase 2 unable to run end to end; (4) a reduced smoke run (2 folds, 3 epochs, capped images) to prove the chain before committing to a real one; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24f — topomap/coherence grid layout; recovering an orphaned commit
+
+**First, a git recovery worth recording so it isn't repeated.** The previous session's work (PROJECT.md recovery, glob dedup, augmentation flags, requirements rewrite) was committed onto branch `fix/duplicate-ultralytics-requirement` as `5d72788`, but PR #1 merged only the earlier commit on that branch (`5940b9d`, the duplicate-pin removal). `main` was then fast-forwarded and the branch deleted, leaving `5d72788` orphaned — the files on disk silently reverted to their pre-session state. Recovered with `git cherry-pick 5d72788`; no conflict, since the rewritten `requirements.txt` already satisfied the PR's intent (ultralytics listed once). Found via `git reflog`, which still held the commit. **Lesson: check `git log` shows the expected commits after a PR merge + pull; a fast-forward past your own branch discards it silently.**
+
+**`yolov8n-cls.pt` (5.5 MB) is now tracked** as of `9cae0e4`, and pushed. `.gitignore` gained `*.pt` in the recovered commit, but gitignore does not untrack an already-committed file, so the two now disagree. Ultralytics re-downloads this file on demand, so it does not need to be in the repo. Left tracked pending a decision — `git rm --cached yolov8n-cls.pt` removes it going forward, though it stays in history.
+
+**`fix/topomap-grid-layout` (§6J) — done, measured.** `generate_topomap_image` and `generate_coherence_image` both drew their 5 bands as `plt.subplots(1, 5, figsize=(10, 10))` — a single row on a square canvas. Both topomap heads and 19x19 coherence matrices render with equal aspect, so content is capped by the SHORTER side of its cell: 2 in wide in a 2 x 10 in cell, leaving the other 8 inches as whitespace.
+
+Added `_make_panel_grid(n_panels)`, shared by both functions: picks `rows = floor(sqrt(n))`, `cols = ceil(n/rows)` (5 -> 2x3), keeps the canvas square, and switches off leftover cells so they render blank rather than as empty framed boxes. Exercised at n = 1, 2, 4, 5, 6, 9.
+
+The square canvas is unchanged and load-bearing — it is what stops the final resize from stretching heads into ovals (the 2026-08-1x fix). Only the arrangement inside it changed.
+
+**Measured on a real generated image rather than asserted:**
+
+| Layout | Cell | Head Ø | Canvas inked |
+|---|---|---|---|
+| 1x5 (old) | 2.00 x 10.00 in | 44 px | 15.0% |
+| 2x3 (new) | 3.33 x 5.00 in | **74 px** | **41.8%** |
+
+1.68x linear, 2.83x area, at identical output size and compute. Regression check: head width 74 px vs height 75 px, aspect 0.987 — still round, oval fix intact. Coherence images went from the same ~1x5 waste to 54.1% inked.
+
+**The handoff's §6J figures were wrong and are corrected here.** It claimed 2x3 gives "~110 px, 4x effective resolution." ~110 px is the **2x2** number (5 in cells), and 2x2 holds only four panels. Real 2x3 result is 74 px / 2.83x area. Still clearly worth doing — but the arithmetic had been attached to the wrong layout.
+
+**Deliberately not done: the 2x2 variant.** It would give ~112 px, but requires dropping a band to four. The obvious candidate is Gamma, which §6N already flags as filter-shaped (50 Hz low-pass and 50 Hz notch overlap, transition band ~44-56 Hz). That is a decision about which bands the model sees, not a layout change, so it stays open rather than being bundled into a layout commit.
+
+**Found while testing, not fixed here:** `spectral_connectivity_epochs` emits `fmin=0.500 Hz corresponds to 0.750 < 5 cycles based on the epoch length 1.500 sec, need at least 10.000 sec epochs or fmin=3.333. Spectrum estimate will be unreliable.` The **Delta-band coherence panel is not a trustworthy estimate at 1.5 s epochs** — the library says so explicitly. Same root cause as §6M (cone of influence): 1.5 s epochs cannot support low-frequency estimates. Either lengthen epochs for the coherence representation specifically (it is already computed per subject per condition, not per epoch, so it is free to use a different windowing) or drop Delta from the coherence panels. Not bundled here.
+
+- **Next:** (1) §6T epoch capping — prerequisite for any CPU run; (2) `feat/save-oof-probabilities` (§6P) and `feat/evaluate-on-test` (§6Q); (3) reduced smoke run (2 folds, 3 epochs, capped) to prove the chain end to end; (4) decide the Gamma/2x2 question and the Delta-coherence question above; (5) `fix/scalogram-normalization` (§6H).

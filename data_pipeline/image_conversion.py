@@ -16,6 +16,7 @@ grouped CV (see PROJECT.md sec 6/Phase 2). Do not shuffle epochs into splits
 independently, or you leak the same subject's epochs across train and test.
 """
 
+import math
 import os
 
 import matplotlib
@@ -52,6 +53,43 @@ def _fig_to_rgb_array(fig) -> np.ndarray:
     buf = np.asarray(fig.canvas.buffer_rgba())
     img = Image.fromarray(buf).convert("RGB").resize((IMG_SIZE, IMG_SIZE))
     return np.array(img)
+
+
+def _make_panel_grid(n_panels: int, figsize: tuple = (10, 10)):
+    """
+    Lay out n_panels equal cells on a SQUARE canvas, as close to square as
+    n_panels allows, and return (fig, axes) where axes is a flat list of
+    exactly n_panels axes. Any leftover cells are switched off so they render
+    as blank background rather than empty framed boxes.
+
+    Why this exists rather than plt.subplots(1, n): both topomaps and
+    coherence matrices are drawn with equal aspect, so the plotted content is
+    a circle/square limited by the SHORTER side of its cell. A 1xN row on a
+    square canvas gives each panel a cell of (canvas/N) wide by (canvas) tall,
+    so the content is capped by that narrow width and the rest of the cell is
+    whitespace.
+
+    Measured for the 5 bands used here, at IMG_SIZE=224 (22.4 px per canvas
+    inch):
+        1x5 -> cell 2.00 x 10.00 in -> content  ~45 px, ~16% of canvas inked
+        2x3 -> cell 3.33 x  5.00 in -> content  ~75 px, ~44% of canvas inked
+    i.e. ~1.7x linear / ~2.8x area resolution for the same pixels and the same
+    compute. (A 2x2 grid would give ~112 px, but only holds 4 panels -- that
+    is a decision about DROPPING a band, not a layout change, so it is
+    deliberately not done here.)
+
+    The canvas stays square: MNE draws each head as a true circle, and
+    resizing a non-square canvas down to IMG_SIZE x IMG_SIZE is what stretched
+    the heads into ovals originally. Keeping the canvas square is load-bearing
+    for that fix -- only the cell arrangement inside it changes.
+    """
+    n_rows = max(1, int(math.floor(math.sqrt(n_panels))))
+    n_cols = int(math.ceil(n_panels / n_rows))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    axes = np.atleast_1d(np.asarray(axes)).ravel()
+    for extra in axes[n_panels:]:
+        extra.axis("off")  # leftover cells: blank, not an empty framed box
+    return fig, list(axes[:n_panels])
 
 
 def generate_scalogram_image(epoch_data: np.ndarray, ch_names: list, sfreq: float) -> np.ndarray:
@@ -102,12 +140,11 @@ def generate_topomap_image(epoch_data: np.ndarray, info: mne.Info) -> np.ndarray
     from scipy.signal import welch
 
     sfreq = info["sfreq"]
-    fig, axes = plt.subplots(1, len(TOPOMAP_BANDS), figsize=(10, 10))
-    # NOTE: figure must be SQUARE (not wide-and-short) even though the layout
-    # is a single row — resizing a wide canvas down to a square IMG_SIZE x
-    # IMG_SIZE output stretches the round head shapes into ovals. MNE already
-    # draws each head as a true circle within its own axes; keeping the
-    # overall canvas square is what prevents the final resize from distorting it.
+    # Square canvas (see _make_panel_grid): non-square canvases get stretched
+    # into ovals by the final resize to IMG_SIZE x IMG_SIZE. The grid packs the
+    # bands into roughly-square cells instead of one thin row, which is what
+    # makes each head ~75 px instead of ~45 px for the same output size.
+    fig, axes = _make_panel_grid(len(TOPOMAP_BANDS))
 
     freqs, psd = welch(epoch_data, fs=sfreq, nperseg=min(256, epoch_data.shape[1]), axis=-1)
 
@@ -198,8 +235,10 @@ def generate_coherence_image(epochs: mne.Epochs, ch_names: list) -> np.ndarray:
     )
     data = np.abs(con.get_data(output="dense"))  # imcoh can be negative; magnitude is what's meaningful
 
-    fig, axes = plt.subplots(1, len(TOPOMAP_BANDS), figsize=(10, 10))  # square canvas — same
-    # oval-distortion reasoning as generate_topomap_image applies to any square matrix plot too.
+    # Same grid + square-canvas reasoning as generate_topomap_image: a 19x19
+    # coherence matrix is drawn with equal aspect too, so a 1xN row wastes the
+    # same ~80% of the canvas on whitespace.
+    fig, axes = _make_panel_grid(len(TOPOMAP_BANDS))
 
     for ax, (band_name, _) in zip(axes, TOPOMAP_BANDS.items()):
         band_idx = list(TOPOMAP_BANDS.keys()).index(band_name)
