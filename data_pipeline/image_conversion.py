@@ -46,6 +46,17 @@ CWT_FREQ_RANGE_HZ = (0.5, 50)
 CWT_N_FREQS = 40
 CWT_WAVELET = "cmor1.5-1.0"
 
+# Welch segment length for topomap band power. Was min(256, n_samples), which
+# at 500 Hz gives df = 1.953 Hz -- and 4/8/12/30 all fall BETWEEN bins at that
+# resolution, so each band integrates over a span that is not the band it is
+# labelled with. Same class of error as the 27% TBR shift on 2026-08-24c.
+#
+# 1000 gives df = 0.5 Hz, and 4/8/12/30 are all exact multiples of 0.5, so every
+# band edge lands on a bin. Clamped to n_samples downstream: at the current 1.5 s
+# epoch length this resolves to 750 (df = 0.6667), where 4/8/12/30 are also all
+# exact multiples. Both are correct; the constant documents the intent.
+TOPOMAP_NPERSEG = 1000
+
 
 def _fig_to_rgb_array(fig) -> np.ndarray:
     """Render a matplotlib figure to an RGB numpy array, resized to IMG_SIZE."""
@@ -146,9 +157,22 @@ def generate_topomap_image(epoch_data: np.ndarray, info: mne.Info) -> np.ndarray
     # makes each head ~75 px instead of ~45 px for the same output size.
     fig, axes = _make_panel_grid(len(TOPOMAP_BANDS))
 
-    freqs, psd = welch(epoch_data, fs=sfreq, nperseg=min(256, epoch_data.shape[1]), axis=-1)
+    freqs, psd = welch(epoch_data, fs=sfreq,
+                       nperseg=min(TOPOMAP_NPERSEG, epoch_data.shape[1]), axis=-1)
 
     for ax, (band_name, (lo, hi)) in zip(axes, TOPOMAP_BANDS.items()):
+        # Inclusive on BOTH edges, deliberately. The shared bin (e.g. 8.0 Hz in
+        # both Theta and Alpha) is counted in each band -- but each topomap is
+        # drawn with its own auto-scaled colormap, so one extra bin out of 7-28
+        # shifts nothing visible. Making these half-open would tile the bands
+        # without overlap but would also make each band span LESS than its
+        # nominal width, which is the worse error.
+        #
+        # NOTE: classical_features._band_power() integrates with trapezoid
+        # instead, where endpoints carry half weight -- so the shared bin splits
+        # 0.5/0.5 across adjacent bands and sums to exactly 1. That path is
+        # already correct and must NOT be changed to half-open: it would make
+        # theta integrate 4.00-7.33 Hz and report it as the 4 Hz band.
         band_mask = (freqs >= lo) & (freqs <= hi)
         band_power = psd[:, band_mask].mean(axis=1)
         mne.viz.plot_topomap(band_power, info, axes=ax, show=False, cmap="jet", contours=0)
