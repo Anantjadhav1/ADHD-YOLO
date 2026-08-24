@@ -94,6 +94,12 @@ def run_subject(
     epochs_by_task = {"EC": result["ec_epochs"], "EO": result["eo_epochs"]}
     if "vcpt_epochs" in result:
         epochs_by_task["VCPT"] = result["vcpt_epochs"]
+    # Continuous segments for coherence only -- it re-epochs at 10 s rather
+    # than reusing the 1.5 s image epochs. Keys are ignored by
+    # process_epochs_to_images, which iterates the task names above.
+    for key in ("ec_raw", "eo_raw"):
+        if key in result:
+            epochs_by_task[key.split("_")[0].upper() + "_raw"] = result[key]
 
     try:
         counts = process_subject_from_manifest(

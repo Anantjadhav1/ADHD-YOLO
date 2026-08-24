@@ -57,6 +57,30 @@ CWT_WAVELET = "cmor1.5-1.0"
 # exact multiples. Both are correct; the constant documents the intent.
 TOPOMAP_NPERSEG = 1000
 
+# Coherence uses its OWN window length, independent of the 1.5 s epochs the
+# image pipeline uses. It can: coherence is computed once per subject per
+# condition, not per epoch, so nothing downstream depends on the two matching.
+#
+# 1.5 s gives 0.75 cycles at 0.5 Hz -- MNE refuses to treat that as an estimate
+# and says so ("need at least 10.000 sec epochs or fmin=3.333"). 10 s gives 5
+# cycles at Delta's lower edge, which is MNE's stated minimum, and improves
+# every other band too (Theta went from 6 cycles to 40).
+#
+# A ~240 s resting segment yields ~47 windows at 50% overlap -- ample for a
+# stable estimate. The alternative, dropping Delta, solves the warning by
+# deleting the data rather than the problem.
+COHERENCE_WINDOW_SEC = 10.0
+COHERENCE_OVERLAP = 0.5
+
+# Suffix marking a continuous Raw segment inside epochs_by_task, e.g. "EC_raw".
+# These entries exist only for coherence, which re-epochs at COHERENCE_WINDOW_SEC.
+# The per-epoch image path MUST skip them: Raw.get_data() returns
+# (n_channels, n_samples) rather than (n_epochs, n_channels, n_samples), so the
+# indexing silently reads channels as if they were epochs.
+# Defined once and used at both the producer and consumer end so the two cannot
+# drift apart.
+RAW_SEGMENT_SUFFIX = "_raw"
+
 
 def _fig_to_rgb_array(fig) -> np.ndarray:
     """Render a matplotlib figure to an RGB numpy array, resized to IMG_SIZE."""
@@ -282,8 +306,31 @@ def generate_coherence_image(epochs: mne.Epochs, ch_names: list) -> np.ndarray:
     with real variation across channel pairs, which is what a CNN can
     actually learn from).
     """
-    eeg_epochs = epochs.copy().pick(ch_names)  # exclude LABEL etc — confirmed necessary,
-    # LABEL was riding along uncounted (20 "channels" instead of 19) before this pick was added.
+    if isinstance(epochs, mne.io.BaseRaw):
+        # Continuous input: re-epoch at COHERENCE_WINDOW_SEC. Overlapping
+        # windows are fine here -- spectral_connectivity_epochs averages across
+        # trials, and overlap trades a little independence for a lot more
+        # averaging, which is the right side of that trade at this window length.
+        step = COHERENCE_WINDOW_SEC * (1.0 - COHERENCE_OVERLAP)
+        events = mne.make_fixed_length_events(epochs, duration=step)
+        sfreq = float(epochs.info["sfreq"])
+        eeg_epochs = mne.Epochs(
+            epochs, events, tmin=0, tmax=COHERENCE_WINDOW_SEC - 1.0 / sfreq,
+            baseline=None, preload=True,
+            picks=[c for c in ch_names if c in epochs.ch_names],
+            reject=None, verbose=False,
+        )
+        if len(eeg_epochs) < 5:
+            raise ValueError(
+                f"Only {len(eeg_epochs)} windows of {COHERENCE_WINDOW_SEC}s available; "
+                "coherence needs more trials than that to be stable. Check the "
+                "segment length before trusting this subject's coherence panel."
+            )
+    else:
+        # Legacy path: pre-epoched input. Delta is unreliable here -- kept so
+        # existing callers and tests do not break.
+        eeg_epochs = epochs.copy().pick(ch_names)  # exclude LABEL etc — confirmed necessary,
+        # LABEL was riding along uncounted (20 "channels" instead of 19) before this pick was added.
 
     con = mne_connectivity.spectral_connectivity_epochs(
         eeg_epochs, method="imcoh", mode="multitaper",
@@ -328,9 +375,12 @@ def process_coherence_for_subject(epochs_by_task: dict, subject_id: str, label: 
     os.makedirs(out_dir, exist_ok=True)
 
     for task in ["EC", "EO"]:
-        if task not in epochs_by_task:
+        # Prefer the continuous segment when the caller supplies one -- see
+        # COHERENCE_WINDOW_SEC. Falls back to epochs so older callers still work.
+        source = epochs_by_task.get(task + RAW_SEGMENT_SUFFIX) or epochs_by_task.get(task)
+        if source is None:
             continue
-        img = generate_coherence_image(epochs_by_task[task], CHANNELS_19)
+        img = generate_coherence_image(source, CHANNELS_19)
         path = os.path.join(out_dir, f"{subject_id}_{task}.png")
         Image.fromarray(img).save(path)
         counts[task] = 1
@@ -366,6 +416,8 @@ def process_subject_from_manifest(epochs_by_task: dict, subject_id: str,
 
     counts = {}
     for task, epochs in epochs_by_task.items():
+        if task.endswith(RAW_SEGMENT_SUFFIX):
+            continue  # continuous segment for coherence only -- see RAW_SEGMENT_SUFFIX
         counts[task] = process_epochs_to_images(
             epochs, subject_id, label, task, split, output_dir, max_epochs=max_epochs,
         )

@@ -408,6 +408,17 @@ def preprocess_subject(eoec_filepath: str, vcpt_filepath: str | None = None) -> 
     raw_eoec, ica_diag_eoec = remove_artifacts_ica(raw_eoec)
     result["ica_eoec"] = ica_diag_eoec
     split = split_eoec_by_alpha(raw_eoec)
+    # Cleaned CONTINUOUS segments, kept alongside the epoched versions.
+    # Coherence needs a different window length than the image pipeline (see
+    # image_conversion.COHERENCE_WINDOW_SEC): at 1.5 s, MNE reports
+    # "fmin=0.500 Hz corresponds to 0.750 < 5 cycles" -- less than one full
+    # cycle of Delta, so that panel is not an estimate at all. Re-epoching from
+    # continuous data is the only correct route: concatenating the 1.5 s epochs
+    # would splice non-contiguous segments (they are post-rejection), and every
+    # join is a step discontinuity whose broadband splatter lands hardest in
+    # the low frequencies this is meant to fix.
+    result["ec_raw"] = split["ec"]
+    result["eo_raw"] = split["eo"]
     result["ec_epochs"], result["reject_ec"] = epoch_signal(split["ec"], return_diagnostics=True)
     result["eo_epochs"], result["reject_eo"] = epoch_signal(split["eo"], return_diagnostics=True)
     result["alpha_ratio"] = split["alpha_ratio"]
