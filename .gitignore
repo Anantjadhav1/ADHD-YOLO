@@ -4,6 +4,10 @@ data/
 *.mat
 models/*.pt
 models/*.pth
+# Ultralytics downloads pretrained weights into the CWD on first use, so they
+# land in the repo root rather than models/ -- ignore them wherever they appear.
+*.pt
+*.pth
 
 # Python
 __pycache__/

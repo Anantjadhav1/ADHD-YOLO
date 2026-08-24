@@ -263,3 +263,62 @@ Taken together this is an independent replication, on our own data, of the 2020 
 **Still outstanding across four sessions:** duplicate-subject-ID check on the 109 EOEC files; recovering `PROJECT.md` from git history. One command each, both blocking the full-cohort run.
 
 - **Next:** (1) duplicate-ID check and `PROJECT.md` recovery — these keep slipping and block everything; (2) re-run the 20-subject TBR check on artifact-rejected data; (3) `fix/yolo-augmentation-flags`; (4) `fix/topomap-grid-layout`.
+
+
+### 2026-08-24d — both four-session blockers cleared; first real 108-subject manifest exists
+
+Both items that kept slipping across four sessions turned out to be genuinely one command each, but the duplicate-ID "check" surfaced a real bug rather than just confirming or refuting the prediction.
+
+**`PROJECT.md` recovered.** It was never edited down — commit `78b1b1e` (2026-08-16) accidentally overwrote it with `PROGRESS.md`'s content (both are 38 lines, identical text). The real 125-line v2 guideline was intact at the initial commit (`971d71a`) the whole time. Restored via `git show 971d71a:PROJECT.md > PROJECT.md`; no content was lost or needed to be reconstructed.
+
+**Duplicate-ID prediction confirmed, and it's worse than "prediction, not yet verified" suggested.** Tested `discover_subjects`'s actual glob calls directly against the real 109-file dataset at `D:\ADHD-Faezeh Rohani-edf\edf (all)\`:
+- `glob("*-EOEC.edf")` and `glob("*-EOEC.EDF")` each returned the **same 108 paths** — Windows resolves both patterns against the same case-insensitive filesystem, so this isn't "108 lowercase + 108 uppercase distinct files," it's 108 real files each matched twice. `discover_subjects` concatenated both lists without deduping, so the loop would hit `sf.subject_id in subjects` on the very first repeated path and raise `ValueError` immediately — confirmed by direct reproduction, not just code reading. **Fixed** in `data_pipeline/subject_split.py::discover_subjects` by deduping matches on `os.path.normcase(os.path.abspath(path))` before the loop. Kept the double-glob (not simplified to one call) because on a genuinely case-sensitive filesystem (Linux), `.edf` and `.EDF` can be real distinct files and both still need to be found.
+- **Second, unrelated bug found by the same investigation:** one real file, `C11121140-2019.08.26-10.02.39-EOEC..edf`, has a double dot before the extension (a naming artifact in the source dataset, not our code). Neither glob pattern matches it, so `discover_subjects` was silently dropping subject C11121140 from the cohort entirely — not crashing, not logging, just absent. Caught by diffing every EOEC-ish filename on disk against what the glob actually matched. **Fixed:** `discover_subjects` now also walks `data_dir` and `warnings.warn()`s on any file containing the task token (`EOEC`) that didn't match the strict pattern, so a malformed filename is flagged for a manual naming decision instead of silently shrinking the cohort. Did not rename the source file — it's raw data outside the repo, and the fix belongs in code, not in the dataset.
+
+**Ran the real split for the first time.** `py -m data_pipeline.subject_split --data-dir "D:/ADHD-Faezeh Rohani-edf/edf (all)" --output data_pipeline/splits/subject_splits.csv`:
+- 108 subjects discovered (C11121140 correctly flagged and excluded, warning printed), 0 crashes.
+- Stratified holdout test: n=17 (9 Control / 8 ADHD). 5-fold CV over the rest: 18-19 subjects/fold, balanced within 1 subject per class per fold.
+- 108 rows in the manifest, 108 unique `subject_id` (no leakage at the discovery stage), 8 subjects missing a `vcpt_path` (expected — VCPT is optional per `SubjectRecord`, not every EOEC subject has a matching VCPT recording on disk).
+- This is the first real subject-level manifest this project has ever had against the full cohort — everything before this was 3-5 real subjects or synthetic data.
+
+**Not done this session (deliberately out of scope):** did not run `build_dataset.py` or generate images/features from this manifest. That's a long-running, GPU-adjacent step and every image/feature is already known-stale pending artifact-rejection regeneration (per 2026-08-24b/c) — running it now would produce output that needs regenerating anyway.
+
+- **Next:** (1) `build_dataset.py` on all 108 subjects using this manifest, now that both blockers are clear — the actual Phase 2 make-or-break run; (2) decide what to do about C11121140 (inspect the malformed file / ask the dataset source / accept 108 instead of 109) before that run; (3) re-run the 20-subject TBR check on artifact-rejected data; (4) `fix/yolo-augmentation-flags`; (5) `fix/topomap-grid-layout`.
+
+
+### 2026-08-24e — augmentation flags disabled; the environment was never real
+
+Goal was `fix/yolo-augmentation-flags` (one small change). Installing the dependencies to verify it exposed that the declared environment and the actual environment had nothing in common, and that Phase 2 was blocked by something not on any list.
+
+**`fix/yolo-augmentation-flags` — done and verified against a real training run.** `model.train()` ran with Ultralytics' photograph defaults: `fliplr=0.5` mirrors topomap hemispheres (destroying F3/F4 asymmetry) and reverses the scalogram time axis, `hsv_*` recolours a colormap where colour IS the measurement, `scale`/`erasing` crop or blank channels out of the composite. Added `DISABLE_AUGMENTATION`, spread into `model.train()`.
+
+**The flag list in the handoff doc was wrong in two ways, both caught by checking against the installed package rather than copying:**
+- It included `cutmix`, which is **not a valid key** in the pinned version — `check_dict_alignment` raises on unknown keys, so the training call would have crashed on the first fold.
+- It included `degrees`, `translate`, `shear`, `perspective`, `mixup` — all valid config keys, none of which `ClassificationDataset.__init__` ever reads. Setting them to 0.0 looks like a fix and does nothing. Confirmed by parsing that method's source for `args.<key>`; the classification path reads exactly 8 augmentation keys and no more.
+
+Method used, and worth reusing: derive the list from the source rather than from `default.yaml`, because `default.yaml` is the union across tasks. Recorded in the comment on the constant along with the one-liner to re-derive it.
+
+**Verified the way §6O asked for** — ran a real 1-epoch train on a toy dataset and read back the `args.yaml` Ultralytics writes: all 8 flags recorded exactly as intended. Also re-confirmed the relative-`project`-path nesting from 2026-08-17 still happens on the new version (the smoke test reproduced it), so `run_cv`'s `.resolve()` is still required.
+
+**BLOCKER FOUND, not on any prior list: the pinned Ultralytics cannot load pretrained weights on any installable torch.**
+- `ultralytics==8.2.31` calls `torch.load(file, map_location="cpu")` with no `weights_only` argument. PyTorch **2.6** flipped that default from `False` to `True`. So `YOLO('yolov8n-cls.pt')` — the first line of `run_cv` — raises `UnpicklingError`.
+- PROJECT.md calls ImageNet transfer learning "mandatory, not optional" at N=103, so this blocked Phase 2 completely and would have surfaced only at the first real run.
+- **Downgrading torch is not an escape.** I initially thought torch 2.5.1 was an option — that was a bad check: I grepped the wheel index without filtering for `win_amd64`, so I was reading Linux wheels. On Windows + Python 3.13 the oldest installable torch is **2.6.0**, i.e. the first version with the new default. Recorded because the wrong version of this claim is easy to re-derive.
+- **Resolved by upgrading to `ultralytics==8.3.253`**, which routes through a `torch_load` wrapper that handles it. Chose the last 8.3.x over 8.4.127 to stay closer to the 8.2.x the code was written against.
+
+**Re-verified the three things the upgrade put at risk** (all previously confirmed empirically against 8.2.31, all still hold on 8.3.253):
+1. `DISABLE_AUGMENTATION` — **did NOT survive**: `crop_fraction` was valid in 8.2.31 and is **removed** in 8.3.x, where passing it raises. Dropped it. (`cutmix` becomes valid here but classification still never reads it, so it stays out.) This is the concrete instance of §6O's own warning that arg names shift between versions.
+2. `gradcam.py`'s `model.model.model[8]` hook — still the `C2f` block, still immediately before `Classify` at `[9]`. Confirmed by loading the real model, not assumed.
+3. `gradcam.py`'s `(probs, logits)` tuple assumption — still a 2-tuple, and `probs == softmax(logits)` still holds.
+
+**`backend/requirements.txt` described an environment that has never existed.** Every single pin differed from what is installed — mne 1.7.1 vs 1.12.1, numpy 1.26.4 vs 2.4.4, pandas 2.2.2 vs 3.0.2, torch 2.3.1 vs 2.13.0, and so on for all 17 packages. Nothing was ever installed from this file; the working environment was assembled ad hoc and drifted completely away from it. This is not cosmetic: `classical_features.py` carries an `np.trapezoid` shim *because* `np.trapz` was removed in NumPy 2.0, which is only coherent against NumPy 2.x — the file claimed 1.26.4, where `np.trapz` still exists. Rewritten to the versions actually in use, with the reasoning inline.
+
+**`PyWavelets` was not installed at all** — `image_conversion.py` does `import pywt` for every scalogram, so `build_dataset.py` would have failed immediately on the full run. Installed (1.9.0). Also installed the missing `uvicorn` and `python-multipart`.
+
+**Housekeeping:** Ultralytics downloads pretrained weights into the CWD, so `yolov8n-cls.pt` landed in the repo root where `.gitignore`'s `models/*.pt` did not cover it. Added `*.pt`/`*.pth`.
+
+**Deliberately not done:** the topomap grid fix (§6J) — explained but not written, pending a decision on 2×3-with-Gamma vs 2×2-without. While reading that code I found two adjacent issues, flagged but not bundled: `nperseg=min(256, ...)` in `generate_topomap_image` violates the "`fs/nperseg` must divide evenly into band edges" rule adopted on 2026-08-24c (256 gives df=1.953 Hz; band edges 4/8/12/30 all straddle bins — the same class as the 27% TBR shift), and `(freqs >= lo) & (freqs <= hi)` puts the shared edge bin in both adjacent bands. Separately confirmed that the `.mean()` on line 116 is **not** the mean-vs-integral bug from #17 — each band is drawn with its own auto-scaled colormap, so a constant per-band factor cancels exactly. Stated so nobody re-fixes it.
+
+**Environment note:** CPU-only, no NVIDIA GPU. At ~1,300 epoch-images per subject × 108 subjects ≈ 140,000 images, trained 5× over for 5-fold CV, a full 30-epoch run is days on CPU. **This promotes §6T (cap epochs per subject per condition) from optimization to prerequisite** — and it independently improves the VCPT-dominance problem (65% of images) rather than just being a speed hack.
+
+- **Next:** (1) `fix/topomap-grid-layout` (§6J) once the band decision is made; (2) §6T epoch capping — now a prerequisite for any CPU run, not an optimization; (3) `feat/save-oof-probabilities` (§6P) and `feat/evaluate-on-test` (§6Q), the two gaps that make Phase 2 unable to run end to end; (4) a reduced smoke run (2 folds, 3 epochs, capped images) to prove the chain before committing to a real one; (5) `fix/scalogram-normalization` (§6H).

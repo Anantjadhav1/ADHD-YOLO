@@ -31,6 +31,35 @@ from data_pipeline import subject_split
 
 CLASSES = ["ADHD", "Control"]  # fixed order -> fixed index mapping everywhere below
 
+# Ultralytics' classification defaults (pinned to 8.3.253 in
+# backend/requirements.txt) are tuned for photographs and actively corrupt
+# these images if left on:
+#   fliplr=0.5   reverses the time axis on scalograms; mirrors left/right
+#                hemisphere on topomaps, destroying F3/F4 asymmetry
+#   scale=0.5    RandomResizedCrop-style zoom -> crops channels out of the
+#                composite image (maps to crop range (1-scale, 1.0))
+#   hsv_h/s/v    recolor a colormap where color IS the measurement
+#   erasing=0.4  blanks regions of a 5-channel stack
+#   auto_augment applies photograph-tuned policies (randaugment/etc) on top
+#
+# These are EXACTLY the augmentation keys ClassificationDataset.__init__
+# reads -- derived by parsing that method's source for `args.<key>` against
+# the installed version, not copied from default.yaml. The distinction
+# matters: default.yaml also defines degrees/translate/shear/perspective/
+# mixup/mosaic/copy_paste/bgr/cutmix, all of which are valid config keys the
+# classification path never reads. Setting those to 0.0 would look like a
+# fix and do nothing.
+#
+# This list is VERSION-SENSITIVE and must be re-derived on any Ultralytics
+# upgrade. Already bitten once: `crop_fraction` was valid in 8.2.31 but was
+# REMOVED by 8.3.x, where passing it raises instead of being ignored. Re-derive with:
+#   import inspect, re; from ultralytics.data.dataset import ClassificationDataset
+#   re.findall(r'args\.(\w+)', inspect.getsource(ClassificationDataset.__init__))
+DISABLE_AUGMENTATION = dict(
+    fliplr=0.0, flipud=0.0, scale=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.0,
+    erasing=0.0, auto_augment=None,
+)
+
 
 def subject_id_from_filename(fname: str) -> str:
     """'F08080102_EC_0000.png' -> 'F08080102'. Subject IDs are alnum-only
@@ -196,7 +225,8 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
             # instead of exactly where you asked. Absolute path avoids that.
             abs_output_dir = str(Path(output_dir).resolve())
             model.train(data=ds_root, epochs=epochs, imgsz=imgsz,
-                        project=abs_output_dir, name=f"{representation}_{val_fold}", exist_ok=True)
+                        project=abs_output_dir, name=f"{representation}_{val_fold}", exist_ok=True,
+                        **DISABLE_AUGMENTATION)
 
             per_image = predict_val_fold(model, ds_root)
             subj_df = aggregate_to_subject_level(per_image)

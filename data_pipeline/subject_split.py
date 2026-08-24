@@ -30,6 +30,7 @@ import argparse
 import glob
 import os
 import random
+import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -62,8 +63,36 @@ def discover_subjects(data_dir: str, pattern: str = "*-EOEC.edf") -> list[Subjec
     from data_pipeline.preprocessing import parse_filename  # lazy: avoid mne dependency for dry-run/tests
 
     subjects: dict[str, SubjectRecord] = {}
-    matches = sorted(glob.glob(os.path.join(data_dir, "**", pattern), recursive=True))
-    matches += sorted(glob.glob(os.path.join(data_dir, "**", pattern.upper()), recursive=True))
+    raw_matches = sorted(glob.glob(os.path.join(data_dir, "**", pattern), recursive=True))
+    raw_matches += sorted(glob.glob(os.path.join(data_dir, "**", pattern.upper()), recursive=True))
+    # On case-insensitive filesystems (Windows), the lower- and upper-case glob
+    # above both resolve to the SAME files, so raw_matches contains every real
+    # file twice with identical paths -- not two distinct files. Deduping by
+    # normalized path keeps the double-glob (needed on case-sensitive
+    # filesystems, e.g. Linux, where .edf and .EDF really are different files)
+    # without raising a spurious "duplicate subject" error on every subject.
+    deduped: dict[str, str] = {}
+    for path in raw_matches:
+        deduped.setdefault(os.path.normcase(os.path.abspath(path)), path)
+    matches = sorted(deduped.values())
+
+    # Files that look like they belong to this task but didn't match the strict
+    # naming pattern (e.g. a stray double dot before the extension) would
+    # otherwise be silently dropped from the cohort instead of raising or
+    # appearing in the manifest. Flag them instead of trusting the glob silently.
+    task_hint = pattern.strip("*").lstrip("-").split(".")[0]
+    matched_paths = set(deduped.keys())
+    for root, _dirs, files in os.walk(data_dir):
+        for fname in files:
+            if task_hint.lower() not in fname.lower():
+                continue
+            full = os.path.normcase(os.path.abspath(os.path.join(root, fname)))
+            if full not in matched_paths:
+                warnings.warn(
+                    f"File looks like a {task_hint} recording but didn't match the "
+                    f"expected naming pattern and was SKIPPED (missing from the "
+                    f"manifest): {os.path.join(root, fname)}"
+                )
 
     for path in matches:
         sf = parse_filename(path)
