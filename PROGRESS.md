@@ -352,3 +352,25 @@ The square canvas is unchanged and load-bearing — it is what stops the final r
 **Found while testing, not fixed here:** `spectral_connectivity_epochs` emits `fmin=0.500 Hz corresponds to 0.750 < 5 cycles based on the epoch length 1.500 sec, need at least 10.000 sec epochs or fmin=3.333. Spectrum estimate will be unreliable.` The **Delta-band coherence panel is not a trustworthy estimate at 1.5 s epochs** — the library says so explicitly. Same root cause as §6M (cone of influence): 1.5 s epochs cannot support low-frequency estimates. Either lengthen epochs for the coherence representation specifically (it is already computed per subject per condition, not per epoch, so it is free to use a different windowing) or drop Delta from the coherence panels. Not bundled here.
 
 - **Next:** (1) §6T epoch capping — prerequisite for any CPU run; (2) `feat/save-oof-probabilities` (§6P) and `feat/evaluate-on-test` (§6Q); (3) reduced smoke run (2 folds, 3 epochs, capped) to prove the chain end to end; (4) decide the Gamma/2x2 question and the Delta-coherence question above; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24g — the CNN and classical halves of Phase 2 are finally connected
+
+**`feat/save-oof-probabilities` (§6P) — done.** `run_cv()` computed per-subject validation probabilities on every fold, used them once for that fold's metrics, and dropped them. `fusion_classifier.run_fusion_cv()` takes exactly that table as its `cnn_subject_probs` argument. Nothing connected the two, so **the fused arm of the Phase 2 comparison could not be produced at all** — the headline result is CNN-alone vs classical-alone vs fused, and one of the three had no code path.
+
+Added `collect_oof_predictions(fold_frames, manifest)`; `run_cv()` now accumulates each fold's `subj_df` and returns `(results_df, oof_df)`; `main()` writes `<representation>_oof_cnn_probs.csv` alongside the existing CV results.
+
+**Why concatenated validation folds are legitimately out-of-fold**, recorded because it is the property the whole fusion step depends on: every subject belongs to exactly one fold, and each fold's predictions come from a model that never trained on that fold's subjects. So each row is a prediction on a subject unseen by the model that produced it. Fitting the meta-classifier on in-sample CNN probabilities instead would let it learn to trust an over-confident feature and inflate the fused number.
+
+Written per-representation (`scalogram_oof_cnn_probs.csv`, `topomap_oof_cnn_probs.csv`) because the CNN probability differs between the two models and fusing against the wrong file would silently mismatch rather than error.
+
+**Safety properties, tested both ways rather than assumed:**
+- Duplicate `subject_id` across folds **asserts** — that would mean a subject was validated in two folds, i.e. the split itself leaked. Verified it fires by deliberately injecting a duplicated fold, not just by reading the code.
+- A dev subject with no OOF row **warns and continues**. This happens for real when a subject produced no images (preprocessing failure, or skipped as EC/EO-ambiguous by `build_dataset.py`). It matters because that subject is then absent from the fusion table too, so the CNN-alone and fused arms would be scored on different cohorts — exactly the kind of silent mismatch that makes a comparison table wrong without looking wrong.
+- Empty input raises instead of returning an empty table.
+
+**Verified the actual handoff, not just the function.** Fed the produced table straight into `build_fusion_table()` and then `run_fusion_cv()` end to end on synthetic subjects: merge produces the required `pred_prob_adhd` / `split` / `group` columns, no `split_x`/`split_y` collision (the bug fixed on 2026-08-19 stays fixed), the all-NaN P300 column is dropped as designed, and all three folds train and score. The metrics from that run are meaningless — synthetic data with planted separation — but the chain is real.
+
+**Also:** `main()` now `makedirs(output_dir)` before writing, since it writes two files and no longer relies on Ultralytics having created the directory first.
+
+- **Next:** (1) `feat/evaluate-on-test` (§6Q) — the held-out test split still has no consumer, so `subject_split.py`'s two-stage design remains half-unused; (2) §6T epoch capping, prerequisite for any CPU run; (3) reduced smoke run (2 folds, 3 epochs, capped) against real images; (4) the Gamma/2x2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).

@@ -20,6 +20,7 @@ import argparse
 import os
 import shutil
 import tempfile
+import warnings
 from collections import defaultdict
 from pathlib import Path
 
@@ -176,6 +177,57 @@ def compute_metrics(subj_df: pd.DataFrame) -> dict:
             "specificity": specificity, "auc": auc}
 
 
+def collect_oof_predictions(fold_frames: list, manifest: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stack each fold's subject-level validation predictions into ONE
+    out-of-fold (OOF) table: one row per development subject, holding the
+    probability predicted by the fold in which that subject was held out.
+
+    This is what fusion_classifier.run_fusion_cv() needs as its
+    cnn_subject_probs argument. Without it the CNN half and the classical
+    half of Phase 2 never meet -- run_cv() used to compute exactly these
+    numbers per fold and then discard them, so the fused arm of the
+    CNN-alone / classical-alone / fused comparison could not be produced at
+    all.
+
+    Why concatenating val folds is legitimately "out-of-fold": every subject
+    belongs to exactly one fold (enforced by subject_split.verify_no_leakage),
+    and a fold's predictions come from a model that never saw that fold's
+    subjects during training. So each row is a prediction on a subject unseen
+    by the model that produced it, which is the property the fusion
+    meta-classifier needs -- fitting it on in-sample CNN probabilities would
+    let it learn to trust an over-confident feature.
+
+    Asserts one row per subject: a duplicate means a subject was validated in
+    two different folds, i.e. the split itself leaked. That is worth crashing
+    on rather than silently averaging away.
+    """
+    if not fold_frames:
+        raise ValueError("No fold predictions collected -- cannot build an OOF table.")
+
+    oof = pd.concat(fold_frames, ignore_index=True)
+
+    dupes = oof["subject_id"][oof["subject_id"].duplicated()].unique()
+    assert len(dupes) == 0, (
+        f"LEAKAGE: subject(s) {list(dupes)} were validated in more than one fold. "
+        "Each subject must belong to exactly one fold -- check subject_split.py's manifest."
+    )
+
+    # Not an error, but must not pass silently: a dev subject with no OOF row
+    # produced no images (preprocessing failure, or skipped as EC/EO-ambiguous
+    # by build_dataset.py). Those subjects are absent from the fusion table
+    # too, so the arms of the comparison would be scored on different cohorts.
+    dev_subjects = set(manifest.loc[manifest["split"] != "test", "subject_id"])
+    missing = dev_subjects - set(oof["subject_id"])
+    if missing:
+        warnings.warn(
+            f"{len(missing)} development subject(s) have no CNN prediction and will be "
+            f"absent from the fusion table: {sorted(missing)}. Check build_log.csv for "
+            "preprocessing failures or subjects skipped as EC/EO-ambiguous."
+        )
+    return oof
+
+
 def predict_val_fold(model, ds_root: str) -> list:
     """Run the trained model on every val image, return per-image results
     ready for aggregate_to_subject_level(). Kept separate from training so
@@ -200,11 +252,16 @@ def predict_val_fold(model, ds_root: str) -> list:
 
 
 def run_cv(manifest_path: str, images_root: str, representation: str,
-           output_dir: str, epochs: int = 30, imgsz: int = 224) -> pd.DataFrame:
+           output_dir: str, epochs: int = 30, imgsz: int = 224) -> tuple:
     """Full subject-wise CV loop: for each dev fold, assemble the dataset,
     verify no leakage, train, evaluate at the subject level. TEST split is
     never touched here -- see PROJECT.md sec 6, final test evaluation is a
-    separate one-shot step after model selection is done via these folds."""
+    separate one-shot step after model selection is done via these folds.
+
+    Returns (fold_metrics_df, oof_df). The second element is the per-subject
+    out-of-fold probability table the fusion meta-classifier consumes -- see
+    collect_oof_predictions(). It is returned rather than only printed
+    because it is an INPUT to the next stage, not a report artifact."""
     from ultralytics import YOLO
 
     manifest = subject_split.load_manifest(manifest_path)
@@ -212,6 +269,7 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
 
     dev_folds = sorted(f for f in manifest["split"].unique() if f != "test")
     fold_metrics = []
+    oof_frames = []
 
     with tempfile.TemporaryDirectory() as workdir:
         for val_fold in dev_folds:
@@ -230,6 +288,10 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
 
             per_image = predict_val_fold(model, ds_root)
             subj_df = aggregate_to_subject_level(per_image)
+            # Keep this fold's subject-level predictions -- these ARE the
+            # out-of-fold probabilities the fusion classifier needs. They used
+            # to be computed here, used once for metrics, and dropped.
+            oof_frames.append(subj_df.assign(fold=val_fold))
             metrics = compute_metrics(subj_df)
             metrics["fold"] = val_fold
             fold_metrics.append(metrics)
@@ -242,7 +304,10 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
     for col in ["accuracy", "sensitivity", "specificity", "auc"]:
         print(f"  {col}: {results_df[col].mean():.3f} ± {results_df[col].std():.3f}")
 
-    return results_df
+    oof_df = collect_oof_predictions(oof_frames, manifest)
+    print(f"\nCollected out-of-fold predictions for {len(oof_df)} subjects.")
+
+    return results_df, oof_df
 
 
 def main() -> None:
@@ -254,8 +319,18 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=30)
     args = parser.parse_args()
 
-    results = run_cv(args.manifest, args.images_root, args.representation, args.output_dir, epochs=args.epochs)
+    os.makedirs(args.output_dir, exist_ok=True)
+    results, oof = run_cv(args.manifest, args.images_root, args.representation,
+                          args.output_dir, epochs=args.epochs)
     results.to_csv(os.path.join(args.output_dir, f"{args.representation}_cv_results.csv"), index=False)
+
+    # The fusion stage's actual input. Written per-representation because the
+    # CNN probability differs between scalogram and topomap models, and fusing
+    # against the wrong one would silently mismatch.
+    oof_path = os.path.join(args.output_dir, f"{args.representation}_oof_cnn_probs.csv")
+    oof.to_csv(oof_path, index=False)
+    print(f"Saved out-of-fold CNN probabilities -> {oof_path}")
+    print("  Feed this to fusion_classifier.run_fusion_cv() as cnn_subject_probs.")
 
 
 if __name__ == "__main__":
