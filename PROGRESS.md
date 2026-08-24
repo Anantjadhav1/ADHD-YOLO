@@ -402,3 +402,41 @@ Independently asserts, against the manifest, that no dev subject appears in the 
 Tested end to end on real generated images: the guard on `inner_val_fold='test'` fires, missing test images give a clear actionable error rather than an obscure one, and the full path trains and evaluates 4 test subjects with no dev leakage. Metrics from that run are meaningless (1 epoch, 36 random images) — the plumbing is what was verified. Symlink-based fold assembly also confirmed working on Windows, which was an open risk.
 
 - **Next:** (1) §6T epoch capping — still the prerequisite for any real CPU run; (2) reduced smoke run (2 folds, 3 epochs, capped) against REAL images from `build_dataset.py`, which has still never been run on the 108-subject manifest; (3) §6R inner-validation fix for the CV loop itself, now that the same mechanism exists for the final model; (4) the Gamma/2x2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24i — epoch capping, and the selection rule that nearly reintroduced the bug it fixes
+
+**`feat/epoch-capping` (§6T) — done.** Item (1) on the Next list for four sessions running, and the standing prerequisite for any real CPU run.
+
+**The cap already half-existed, which is why it stayed open.** `--max-epochs-per-task` has been wired through `build_dataset.py` into `image_conversion.py` since the batch driver was written — but as `default=None`, documented as a *"cap for quick testing"*. So the mechanism was there and the policy was not: every real run was uncapped, and the flag was something you remembered to pass.
+
+**Three independent reasons it is now a default of 300 per subject per task**, none of which is speed alone:
+1. **Recording length must not become a learnable feature.** Per-subject epoch totals span 1275–1616 (1.27×). Uncapped, session length is encoded directly in how many training images a subject contributes.
+2. **VCPT dominance.** VCPT yields ~870–920 epochs against ~200–370 each for EC and EO — ~65% of all epoch-images, two thirds of the training signal from one condition. A cap at 300 pulls VCPT to parity and leaves EC/EO almost untouched, since most subjects sit under it there already.
+3. **CPU tractability.** ~1,300 images × 108 subjects ≈ 140,000, trained 5× over for 5-fold CV, is days on a CPU-only machine.
+
+**The part that mattered more than the number: which epochs survive.** The existing implementation was `n = min(max_epochs, len(data))` followed by `range(n)` — keep the first N. Harmless for a smoke test, wrong as a policy, and wrong in a way that quietly *reintroduces reason 1*:
+
+| Recording length | Fraction covered by first-300 |
+|---|---|
+| 1275 epochs | 23.5% |
+| 1616 epochs | 18.5% |
+
+A first-N cap represents every subject by their opening minutes, and covers a *different fraction* of the session depending on how long that session was. Session position is not neutral — electrode impedance drifts, and drowsiness in a resting-state paradigm rises with time on task. So the cap installed to remove recording-length confounding would have smuggled it back in through the selection rule. Now `select_epoch_indices()` samples evenly across the whole recording via `np.linspace`: 100% span for every subject regardless of length.
+
+**Alternatives considered:**
+- **Chosen: uniform stride.** Deterministic — no seed to record in the manifest, identical output on re-run.
+- **Rejected: random subsample with fixed seed.** Immune to phase-locking against a periodic artifact, but adds a seed that must be tracked for reproducibility, and two seeds give two different datasets. Nothing in this cohort is known to be periodic at epoch scale, so this buys immunity to a hypothetical at a real cost.
+- **Rejected: keep first-N.** The smallest diff, and the one that preserves the confound.
+
+**Filenames carry the ORIGINAL epoch index, not a resequenced counter** — an image on disk still traces back to its position in the source recording. Verified this is safe downstream: `train_yolo_cls.subject_id_from_filename` splits on the *first* underscore, so it never reads that field. (Checked rather than assumed — filename parsing has broken twice before on this project.)
+
+**Verified, not assumed.** 30 assertions on `select_epoch_indices` covering the real cohort numbers (1275/1616/920) plus the tightest duplicate-risk case, n=301 capped to 300: exactly `cap` indices returned, strictly increasing (a duplicate would mean two identical images), first and last epoch both present, degenerate n=0 and cap=1 handled. Then end to end through the actual image-writing path on a synthetic 20-epoch subject: cap 5 produced indices `[0, 5, 10, 14, 19]`, scalogram and topomap covered the same epochs, and `subject_id` still parsed.
+
+**Caught by testing, not review:** argparse `%`-formats help strings, so the literal `~65%` in the `--no-epoch-cap` help text raised `TypeError: %o format: an integer is required` and crashed `--help` outright. Escaped to `%%`.
+
+**`--no-epoch-cap` exists** to reproduce the pre-cap dataset and measure what the cap costs. `run_batch`'s default was changed to match the CLI's rather than left at `None` — mismatched defaults would mean a programmatic caller silently builds an uncapped dataset that looks identical on disk to a capped one.
+
+**Not done:** the cap is uniform across tasks. If EC/EO turn out to carry more signal than VCPT, a per-task cap (higher for EC/EO, lower for VCPT) is the obvious refinement — but that is a weighting decision that wants a result to justify it, not a guess.
+
+- **Next:** (1) reduced smoke run (2 folds, 3 epochs, capped) against REAL images from `build_dataset.py`, which has still never been run on the 108-subject manifest — now unblocked; (2) §6R inner-validation fix for the CV loop itself; (3) the Gamma/2x2 and Delta-coherence decisions; (4) `fix/scalogram-normalization` (§6H).

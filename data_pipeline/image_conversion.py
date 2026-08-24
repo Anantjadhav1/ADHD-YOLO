@@ -160,6 +160,36 @@ def generate_topomap_image(epoch_data: np.ndarray, info: mne.Info) -> np.ndarray
     return arr
 
 
+def select_epoch_indices(n_available: int, max_epochs: int | None) -> list[int]:
+    """
+    Choose WHICH epochs to image when a cap applies — evenly spaced across the
+    whole recording, not the first `max_epochs`.
+
+    Taking the first N (the previous behaviour) would represent every subject
+    by the opening minutes of their session only, and session position is not
+    neutral: electrode impedance drifts over a recording, and drowsiness in a
+    resting-state paradigm increases with time on task. Worse, that bias would
+    land unevenly — a subject with 1616 epochs would be represented by a much
+    smaller *fraction* of their session than one with 1275. Recording-length
+    confounding is the thing capping exists to remove, so reintroducing it
+    through the selection rule would defeat the point.
+
+    Returns the ORIGINAL epoch indices. Output filenames carry these, so an
+    image on disk still traces back to its position in the source recording
+    rather than to a resequenced counter. Safe for downstream parsing:
+    train_yolo_cls.subject_id_from_filename splits on the FIRST underscore,
+    so it never reads this field.
+
+    A fixed stride can in principle phase-lock to a periodic artifact; nothing
+    in this cohort is known to be periodic at epoch scale, and determinism
+    (no seed to record in the manifest, identical output on re-run) is worth
+    more here than immunity to a hypothetical.
+    """
+    if max_epochs is None or n_available <= max_epochs:
+        return list(range(n_available))
+    return np.linspace(0, n_available - 1, max_epochs).round().astype(int).tolist()
+
+
 def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
                                task: str, split: str, output_dir: str,
                                max_epochs: int | None = None):
@@ -174,19 +204,23 @@ def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
         traces back to the manifest that produced it. Get this via
         process_subject_from_manifest() below — never hand-assign it here,
         or you risk the exact subject-leakage bug subject_split.py exists to prevent.
-    max_epochs: cap for quick testing; None processes all epochs.
+    max_epochs: cap on epochs imaged for this task; None processes all of them.
+        Which epochs survive the cap is decided by select_epoch_indices() —
+        evenly spread across the recording, not the first N. The *policy*
+        (what the cap should be for a real run) lives in build_dataset.py;
+        this function only implements the mechanism.
     """
     ch_names = epochs.ch_names
     sfreq = epochs.info["sfreq"]
     data = epochs.get_data()  # shape (n_epochs, n_channels, n_samples)
 
-    n = len(data) if max_epochs is None else min(max_epochs, len(data))
+    indices = select_epoch_indices(len(data), max_epochs)
 
     for rep_name in ["scalogram", "topomap"]:
         out_dir = os.path.join(output_dir, rep_name, split, label)
         os.makedirs(out_dir, exist_ok=True)
 
-    for i in range(n):
+    for i in indices:
         epoch = data[i]
 
         scal_img = generate_scalogram_image(epoch, ch_names, sfreq)
@@ -197,7 +231,7 @@ def process_epochs_to_images(epochs: mne.Epochs, subject_id: str, label: str,
         topo_path = os.path.join(output_dir, "topomap", split, label, f"{subject_id}_{task}_{i:04d}.png")
         Image.fromarray(topo_img).save(topo_path)
 
-    return n
+    return len(indices)
 
 
 def generate_coherence_image(epochs: mne.Epochs, ch_names: list) -> np.ndarray:

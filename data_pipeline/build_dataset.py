@@ -36,6 +36,25 @@ from data_pipeline import subject_split
 from data_pipeline.image_conversion import process_subject_from_manifest
 from data_pipeline.preprocessing import preprocess_subject
 
+# Cap on epochs imaged per subject per task. This is a POLICY default, not a
+# smoke-test convenience -- it is on for real runs, and there are three
+# independent reasons for it:
+#
+#  1. Recording length must not become a learnable feature. Per-subject epoch
+#     totals span 1275-1616 (1.27x). Uncapped, a subject's session length is
+#     encoded directly in how many training images they contribute.
+#  2. VCPT dominance. VCPT yields ~870-920 epochs per subject against ~200-370
+#     each for EC and EO, so it supplies ~65% of all epoch-images -- two thirds
+#     of the training signal coming from one condition. A cap at 300 pulls VCPT
+#     down to parity while leaving EC/EO almost entirely untouched, since most
+#     subjects are already under it there.
+#  3. CPU tractability. ~1,300 epoch-images x 108 subjects ~= 140,000 images,
+#     trained 5x over for 5-fold CV, is days on a CPU-only machine. This is
+#     what promotes capping from optimization to prerequisite.
+#
+# Pass --no-epoch-cap to disable, e.g. to quantify what the cap costs.
+DEFAULT_MAX_EPOCHS_PER_TASK = 300
+
 
 @dataclass
 class SubjectResult:
@@ -92,10 +111,13 @@ def run_subject(
 def run_batch(
     manifest_path: str,
     output_dir: str,
-    max_epochs_per_task: int | None = None,
+    max_epochs_per_task: int | None = DEFAULT_MAX_EPOCHS_PER_TASK,
     include_ambiguous: bool = False,
     subjects_filter: list[str] | None = None,
 ) -> list[SubjectResult]:
+    # Default matches the CLI's on purpose. If this stayed None while the CLI
+    # capped, a programmatic caller would silently build an uncapped dataset
+    # that looks like the capped one on disk. Pass None explicitly to opt out.
     manifest = subject_split.load_manifest(manifest_path)
     subject_split.verify_no_leakage(manifest)  # re-check even though subject_split.py already checked once --
                                                 # catches a hand-edited manifest before it burns a batch run
@@ -161,9 +183,17 @@ def main() -> None:
     )
     parser.add_argument("--output-dir", type=str, default="data_pipeline/images")
     parser.add_argument(
-        "--max-epochs-per-task", type=int, default=None,
-        help="Cap epochs per subject/task -- use this for a quick smoke-test run on a few subjects "
-             "before committing to the full batch.",
+        "--max-epochs-per-task", type=int, default=DEFAULT_MAX_EPOCHS_PER_TASK,
+        help=f"Cap epochs imaged per subject/task (default: {DEFAULT_MAX_EPOCHS_PER_TASK}). Epochs are "
+             "sampled evenly across the whole recording, not taken from the front. Lower it for a quick "
+             "smoke-test run before committing to the full batch.",
+    )
+    parser.add_argument(
+        "--no-epoch-cap", action="store_true",
+        # NB: argparse %-formats help strings, so a literal percent must be escaped as %%.
+        help="Image every epoch, ignoring --max-epochs-per-task. Reproduces the pre-cap dataset -- "
+             "useful for measuring what the cap costs, but note that recording length then varies "
+             "1275-1616 epochs across subjects and VCPT supplies ~65%% of all images.",
     )
     parser.add_argument(
         "--include-ambiguous", action="store_true",
@@ -182,9 +212,17 @@ def main() -> None:
             "first -- this script reads a split, it never creates one."
         )
 
+    max_epochs_per_task = None if args.no_epoch_cap else args.max_epochs_per_task
+    # Print it: which cap a dataset was built under is not recoverable from the
+    # images afterwards, and it changes what the resulting numbers mean.
+    if max_epochs_per_task is None:
+        print("Epoch cap: DISABLED -- imaging every epoch")
+    else:
+        print(f"Epoch cap: {max_epochs_per_task} per subject/task, sampled evenly across each recording")
+
     results = run_batch(
         args.manifest, args.output_dir,
-        max_epochs_per_task=args.max_epochs_per_task,
+        max_epochs_per_task=max_epochs_per_task,
         include_ambiguous=args.include_ambiguous,
         subjects_filter=args.subjects,
     )
