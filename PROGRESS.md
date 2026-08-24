@@ -374,3 +374,31 @@ Written per-representation (`scalogram_oof_cnn_probs.csv`, `topomap_oof_cnn_prob
 **Also:** `main()` now `makedirs(output_dir)` before writing, since it writes two files and no longer relies on Ultralytics having created the directory first.
 
 - **Next:** (1) `feat/evaluate-on-test` (§6Q) — the held-out test split still has no consumer, so `subject_split.py`'s two-stage design remains half-unused; (2) §6T epoch capping, prerequisite for any CPU run; (3) reduced smoke run (2 folds, 3 epochs, capped) against real images; (4) the Gamma/2x2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24h — the held-out test split finally has a consumer
+
+**`feat/evaluate-on-test` (§6Q) — done.** `subject_split.py` has carved out a stratified subject-level test set since 2026-08-16, and its docstring describes a two-stage design, but `run_cv()` only ever filtered that split out. Nothing read it. Half the design existed on paper only.
+
+Added `evaluate_on_test()`: trains one final model on the development folds, then predicts the test split once and reports subject-level accuracy/sensitivity/specificity/AUC.
+
+**Design decision, with the alternatives and why they lost** — this is a methods-section choice, not an implementation detail:
+- **Chosen: retrain one final model on dev, evaluate once.** Conventional, and it also produces the single trained checkpoint that Phase 3 (Grad-CAM) and Phase 5 (`/predict`) both require and neither currently has — `best.pt` now lands in `runs/<representation>_final/weights/`.
+- **Rejected: ensembling the k fold models.** Costs no extra training, which is genuinely attractive on CPU, but "the model" becomes an ensemble and that muddies the Grad-CAM interpretability claim Phase 3 is built around.
+- **Rejected outright: picking the best-scoring fold model.** Those models were selected on their own validation folds; choosing among them by that score and then reporting a test number carries the selection bias straight through.
+
+**The subtle trap this had to avoid:** Ultralytics always selects `best.pt` by validation accuracy on whatever it is handed as `val`. Passing it the test split would be selection-on-test — the same optimistic bias §6R flags for the CV loop, but landing on the one number that is supposed to be a clean generalisation estimate. So the final model takes an `inner_val_fold` (a development fold, default the last one) purely for checkpoint selection, and `evaluate_on_test` **raises** if asked to use `test` for it. Verified that guard fires rather than assuming it.
+
+**Known cost of that choice:** the final model trains on 4 of 5 dev folds, so ~20% of development data is spent on checkpoint selection. A smaller inner-validation slice (say 10% of dev subjects rather than a whole fold) would recover most of it. Not done — it is a separate change and needs its own stratification logic.
+
+**Also refactored `predict_val_fold` into `predict_class_dirs`**, so CV folds and the test split go through the *same* prediction code. Two prediction paths that could drift apart is exactly how a final test number quietly stops being comparable to the CV numbers printed beside it. Ran the full CV loop afterwards as a regression check: 3 folds, 12 OOF rows, correct columns — the refactor did not break it.
+
+**CLI is deliberately opt-in:** `--evaluate-on-test` is off by default, because a test number that is easy to re-run is a test number that will get iterated against. `--skip-cv` exists for the case where CV already ran, and errors if used without `--evaluate-on-test` rather than silently doing nothing.
+
+**Writes per-subject rows, not just the summary** (`<rep>_test_subject_preds.csv`): `significance_test.py`'s bootstrap needs individual outcomes, and a fused test number needs these probabilities alongside the classical features. Saving only the metrics dict would force a full retrain to recover them.
+
+Independently asserts, against the manifest, that no dev subject appears in the test predictions — `verify_fold_dataset` already checks this, but this is the one number reported as a generalisation estimate, so it is worth two independent checks rather than one.
+
+Tested end to end on real generated images: the guard on `inner_val_fold='test'` fires, missing test images give a clear actionable error rather than an obscure one, and the full path trains and evaluates 4 test subjects with no dev leakage. Metrics from that run are meaningless (1 epoch, 36 random images) — the plumbing is what was verified. Symlink-based fold assembly also confirmed working on Windows, which was an open risk.
+
+- **Next:** (1) §6T epoch capping — still the prerequisite for any real CPU run; (2) reduced smoke run (2 folds, 3 epochs, capped) against REAL images from `build_dataset.py`, which has still never been run on the 108-subject manifest; (3) §6R inner-validation fix for the CV loop itself, now that the same mechanism exists for the final model; (4) the Gamma/2x2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).

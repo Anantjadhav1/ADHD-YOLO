@@ -228,16 +228,21 @@ def collect_oof_predictions(fold_frames: list, manifest: pd.DataFrame) -> pd.Dat
     return oof
 
 
-def predict_val_fold(model, ds_root: str) -> list:
-    """Run the trained model on every val image, return per-image results
-    ready for aggregate_to_subject_level(). Kept separate from training so
-    it's independently testable."""
+def predict_class_dirs(model, root) -> list:
+    """Run the model over a directory laid out as <root>/<class>/*.png and
+    return per-image results ready for aggregate_to_subject_level().
+
+    Split out from predict_val_fold so the exact same prediction path serves
+    both the CV folds (assembled temp dir) and the held-out test split (read
+    straight from images_root) -- two prediction code paths that could drift
+    apart is precisely how a final test number stops being comparable to the
+    CV numbers it is reported beside."""
     results = []
     for cls in CLASSES:
-        val_dir = Path(ds_root) / "val" / cls
-        if not val_dir.exists():
+        cls_dir = Path(root) / cls
+        if not cls_dir.exists():
             continue
-        for img_path in val_dir.glob("*.png"):
+        for img_path in cls_dir.glob("*.png"):
             pred = model.predict(source=str(img_path), verbose=False)[0]
             names = pred.names  # index -> class name, as the model learned it
             adhd_idx = [k for k, v in names.items() if v == "ADHD"][0]
@@ -249,6 +254,117 @@ def predict_val_fold(model, ds_root: str) -> list:
                 "pred_prob_adhd": prob_adhd,
             })
     return results
+
+
+def predict_val_fold(model, ds_root: str) -> list:
+    """Run the trained model on every val image of an assembled fold dataset."""
+    return predict_class_dirs(model, Path(ds_root) / "val")
+
+
+def evaluate_on_test(manifest_path: str, images_root: str, representation: str,
+                     output_dir: str, epochs: int = 30, imgsz: int = 224,
+                     inner_val_fold: str = None) -> tuple:
+    """
+    The one-shot final evaluation on the held-out TEST split, which
+    subject_split.py carves out and which nothing consumed until now -- the
+    two-stage design existed but only half of it was wired up.
+
+    Run this ONCE, after run_cv() has settled the configuration. Every time
+    the test set informs a decision (architecture, epochs, thresholds) it
+    stops being a held-out set and starts being a second validation set, and
+    the number it produces stops being an estimate of generalisation.
+
+    Design, and the alternatives rejected:
+      * Trains ONE final model on the development subjects and evaluates it
+        on test. This is the conventional choice, and it also produces the
+        single trained checkpoint that Phase 3 (Grad-CAM) and Phase 5
+        (/predict) both need and neither currently has.
+      * Ensembling the k fold models was considered -- it costs no extra
+        training, which is attractive on CPU -- but "the model" then becomes
+        an ensemble, which muddies the Grad-CAM interpretability claim that
+        is the whole point of Phase 3.
+      * Picking the best-scoring fold model was rejected outright: those
+        models were selected using their own validation folds, so choosing
+        among them by that score and then reporting a test number carries
+        the selection bias straight through.
+
+    inner_val_fold: one development fold held out purely so Ultralytics can
+        pick `best.pt` by validation accuracy. It must NOT be the test split.
+        Ultralytics always selects a checkpoint using whatever it is given as
+        val, so handing it the test split would be selection-on-test -- the
+        same optimistic bias flagged for the CV loop, but on the one number
+        that is supposed to be clean. Defaults to the last dev fold.
+
+    Returns (metrics_dict, per_subject_df).
+    """
+    from ultralytics import YOLO
+
+    manifest = subject_split.load_manifest(manifest_path)
+    subject_split.verify_no_leakage(manifest)
+
+    dev_folds = sorted(f for f in manifest["split"].unique() if f != "test")
+    if not dev_folds:
+        raise ValueError("Manifest has no development folds -- nothing to train on.")
+    if "test" not in set(manifest["split"]):
+        raise ValueError("Manifest has no 'test' split -- nothing to evaluate against.")
+
+    if inner_val_fold is None:
+        inner_val_fold = dev_folds[-1]
+    if inner_val_fold not in dev_folds:
+        raise ValueError(
+            f"inner_val_fold={inner_val_fold!r} is not a development fold "
+            f"(dev folds: {dev_folds}). It must never be the test split."
+        )
+
+    test_dir = Path(images_root) / representation / "test"
+    if not test_dir.exists():
+        raise FileNotFoundError(
+            f"No test images at {test_dir} -- run build_dataset.py so the test "
+            "split's images exist before the final evaluation."
+        )
+
+    with tempfile.TemporaryDirectory() as workdir:
+        # Reuses the CV assembler, so the final model's training data is built
+        # by exactly the same code (and passes the same leakage check) as every
+        # CV fold. build_fold_dataset only ever reads dev folds, so the test
+        # split cannot be pulled in by construction.
+        ds_root = build_fold_dataset(images_root, representation, inner_val_fold, dev_folds, workdir)
+        verify_fold_dataset(ds_root, inner_val_fold, images_root, representation)
+
+        model = YOLO("yolov8n-cls.pt")
+        abs_output_dir = str(Path(output_dir).resolve())
+        model.train(data=ds_root, epochs=epochs, imgsz=imgsz,
+                    project=abs_output_dir, name=f"{representation}_final", exist_ok=True,
+                    **DISABLE_AUGMENTATION)
+
+        per_image = predict_class_dirs(model, test_dir)
+
+    if not per_image:
+        raise ValueError(f"No test images found under {test_dir} -- cannot evaluate.")
+
+    subj_df = aggregate_to_subject_level(per_image)
+
+    # Belt-and-braces: the assembled training set must share no subject with
+    # test. verify_fold_dataset already checks this, but this is the one
+    # number in the project that gets reported as a generalisation estimate,
+    # so it is worth asserting against the manifest independently rather than
+    # trusting a single upstream check.
+    train_subjects = set(manifest.loc[manifest["split"].isin(dev_folds), "subject_id"])
+    overlap = train_subjects & set(subj_df["subject_id"])
+    assert not overlap, (
+        f"LEAKAGE: subject(s) {sorted(overlap)} are in both the training folds and the "
+        "test split. The final test number would be meaningless."
+    )
+
+    metrics = compute_metrics(subj_df)
+    print(f"\n=== HELD-OUT TEST ({representation}) — one-shot, do not tune against this ===")
+    print(f"  n_subjects  {metrics['n_subjects']}")
+    for k in ["accuracy", "sensitivity", "specificity", "auc"]:
+        print(f"  {k:11} {metrics[k]:.3f}")
+    print(f"  (final model trained on {len(dev_folds) - 1} dev folds, "
+          f"inner val = {inner_val_fold})")
+
+    return metrics, subj_df
 
 
 def run_cv(manifest_path: str, images_root: str, representation: str,
@@ -317,20 +433,58 @@ def main() -> None:
     parser.add_argument("--representation", type=str, default="scalogram", choices=["scalogram", "topomap"])
     parser.add_argument("--output-dir", type=str, default="training/runs")
     parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument(
+        "--evaluate-on-test", action="store_true",
+        help="Run the ONE-SHOT final evaluation on the held-out test split. Off by "
+             "default and deliberately opt-in: this is not a metric to iterate against. "
+             "Every run that informs a decision turns the test set into a second "
+             "validation set. Run it once, when the configuration is settled.",
+    )
+    parser.add_argument(
+        "--inner-val-fold", type=str, default=None,
+        help="Dev fold used only so Ultralytics can select best.pt when training the "
+             "final model (default: last dev fold). Never the test split.",
+    )
+    parser.add_argument(
+        "--skip-cv", action="store_true",
+        help="Skip the CV loop. Only meaningful together with --evaluate-on-test, "
+             "when CV has already been run and its outputs are on disk.",
+    )
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    results, oof = run_cv(args.manifest, args.images_root, args.representation,
-                          args.output_dir, epochs=args.epochs)
-    results.to_csv(os.path.join(args.output_dir, f"{args.representation}_cv_results.csv"), index=False)
+    if args.skip_cv and not args.evaluate_on_test:
+        parser.error("--skip-cv skips everything unless --evaluate-on-test is also given.")
 
-    # The fusion stage's actual input. Written per-representation because the
-    # CNN probability differs between scalogram and topomap models, and fusing
-    # against the wrong one would silently mismatch.
-    oof_path = os.path.join(args.output_dir, f"{args.representation}_oof_cnn_probs.csv")
-    oof.to_csv(oof_path, index=False)
-    print(f"Saved out-of-fold CNN probabilities -> {oof_path}")
-    print("  Feed this to fusion_classifier.run_fusion_cv() as cnn_subject_probs.")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    if not args.skip_cv:
+        results, oof = run_cv(args.manifest, args.images_root, args.representation,
+                              args.output_dir, epochs=args.epochs)
+        results.to_csv(os.path.join(args.output_dir, f"{args.representation}_cv_results.csv"), index=False)
+
+        # The fusion stage's actual input. Written per-representation because the
+        # CNN probability differs between scalogram and topomap models, and fusing
+        # against the wrong one would silently mismatch.
+        oof_path = os.path.join(args.output_dir, f"{args.representation}_oof_cnn_probs.csv")
+        oof.to_csv(oof_path, index=False)
+        print(f"Saved out-of-fold CNN probabilities -> {oof_path}")
+        print("  Feed this to fusion_classifier.run_fusion_cv() as cnn_subject_probs.")
+
+    if args.evaluate_on_test:
+        test_metrics, test_subj = evaluate_on_test(
+            args.manifest, args.images_root, args.representation, args.output_dir,
+            epochs=args.epochs, inner_val_fold=args.inner_val_fold,
+        )
+        # Per-subject rows, not just the summary: significance_test.py's
+        # bootstrap needs the individual correct/incorrect outcomes, and a
+        # fused test number needs these probabilities alongside the classical
+        # features. Writing only the metrics dict would force a retrain to
+        # recover them.
+        test_subj.to_csv(
+            os.path.join(args.output_dir, f"{args.representation}_test_subject_preds.csv"), index=False)
+        pd.DataFrame([test_metrics]).to_csv(
+            os.path.join(args.output_dir, f"{args.representation}_test_metrics.csv"), index=False)
+        print(f"Saved held-out test predictions and metrics -> {args.output_dir}")
 
 
 if __name__ == "__main__":
