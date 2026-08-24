@@ -105,6 +105,28 @@ Not everything in §4 moves accuracy equally. Ranked by leverage for this specif
 
 ---
 
+## 6a. Work-item index (reconstructed)
+
+`PROGRESS.md` refers to work items by `§6<letter>` — §6H, §6J, §6T and so on. Those identifiers were the working vocabulary of the sessions that produced this code, but the lettered list they point at did not survive into the committed version of this document: section 6 above is a Phase 0–5 roadmap with no lettered items in it at all. Every `§6X` citation in the log therefore had no definition anywhere in the repo.
+
+**This table is reconstructed from how each identifier is used across `PROGRESS.md`, not recovered from the original list.** The letters and the work they refer to are evidenced by the log; the wording is mine and will not match whatever the original said. Only identifiers actually cited somewhere appear here — the gaps (§6A–G, §6I, §6K, §6L, §6S) were either never referenced in the log or never existed.
+
+| ID | Work item | Branch | Status |
+|---|---|---|---|
+| §6H | Scalogram normalization — per-frequency-row normalization fixed a visual problem but removes absolute band-power relationships, so theta/beta is not recoverable from the images by design | `fix/scalogram-normalization` | **Open** |
+| §6J | Topomap and coherence band layout — both drew their 5 bands as `subplots(1, 5)` on a square canvas, wasting most of the resolution | `fix/topomap-grid-layout` | Done |
+| §6M | Cone of influence — 1.5 s epochs cannot support low-frequency estimates; the wavelet edge effect makes the low end of the scalogram unreliable | — | **Open** (limitation) |
+| §6N | Gamma is filter-shaped — the 50 Hz low-pass and 50 Hz notch overlap with a ~44–56 Hz transition band, so the Gamma panel reflects the filter rather than physiology | — | **Open** (decision) |
+| §6O | Ultralytics augmentation control — disable the photo augmentations, and verify from the `args.yaml` it writes rather than trusting the call, since arg names shift between versions | — | Done |
+| §6P | Save out-of-fold CNN probabilities — `run_cv()` computed per-subject probabilities and discarded them, while `run_fusion_cv()` requires them as input | `feat/save-oof-probabilities` | Done |
+| §6Q | Evaluate the held-out test split — `subject_split.py` carved out a test set that nothing ever read | `feat/evaluate-on-test` | Done |
+| §6R | Inner validation split for the CV loop — Ultralytics selects `best.pt` by accuracy on the val fold and evaluation then scores on that same fold, so CV accuracy is optimistically biased | — | **Open** |
+| §6T | Cap epochs per subject per task — recording length varies 1275–1616 epochs, VCPT supplies ~65% of all images, and 140k images × 5 folds is days on CPU | `feat/epoch-capping` | Done |
+
+The four open items are the standing backlog: §6R is a correctness issue in a number that will be reported, §6H and §6N are known-cost decisions awaiting a result to justify them, and §6M is a stated limitation rather than a fixable bug at 1.5 s epochs.
+
+---
+
 ## 7. Immediate next steps (this week)
 
 1. Share the raw dataset (or IEEE DataPort link/DOI) so preprocessing can actually start.

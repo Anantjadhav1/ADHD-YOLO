@@ -440,3 +440,24 @@ A first-N cap represents every subject by their opening minutes, and covers a *d
 **Not done:** the cap is uniform across tasks. If EC/EO turn out to carry more signal than VCPT, a per-task cap (higher for EC/EO, lower for VCPT) is the obvious refinement — but that is a weighting decision that wants a result to justify it, not a guess.
 
 - **Next:** (1) reduced smoke run (2 folds, 3 epochs, capped) against REAL images from `build_dataset.py`, which has still never been run on the 108-subject manifest — now unblocked; (2) §6R inner-validation fix for the CV loop itself; (3) the Gamma/2x2 and Delta-coherence decisions; (4) `fix/scalogram-normalization` (§6H).
+
+### 2026-08-24j — the docs were lying in three places, and one §-reference had no referent
+
+**Docs truth pass.** No code changed. Three claims in `README.md` were false against the committed state, and one gap turned out to be real but mis-described.
+
+**The README's headline warning was stale.** It opened with a blockquote saying `PROJECT.md` "is currently broken — a truncated copy of `PROGRESS.md`, not the methodology document." That was fixed in `93cfcc5`; the file is an intact 125-line document with sections 1–9. Anyone reading the README was being told not to trust a file that is fine.
+
+**But it pointed at something still real, narrower than it claimed.** The warning's second half — that modules cite sections which don't exist — still held for one specific class of reference. `PROGRESS.md` uses **§6H, §6J, §6M, §6N, §6O, §6P, §6Q, §6R, §6T** as its canonical work-item vocabulary across nine sessions, and `grep` finds **zero** of them defined anywhere in the repo. Section 6 of `PROJECT.md` is a Phase 0–5 roadmap with no lettered items in it at all. So the recovery restored the document but not whatever sub-numbering those IDs came from, and every `§6X` citation in the log dangled.
+
+**Added `PROJECT.md` §6a — a work-item index, explicitly labelled reconstructed.** Each ID is defined from how it is actually used in this log, with its branch name where one exists and its current status. It is *not* recovered from the original list, and says so in the section itself: the letters and the work they map to are evidenced, the wording is not original. Reconstructing rather than deleting the IDs was the choice because they are load-bearing — nine sessions of history refer to work by these letters, and renaming them now would orphan the log instead of fixing it.
+
+Two of the nine (§6M, §6N) have no branch and never will — they are a limitation and a pending decision, not tasks. Recording them as such is the point of the table.
+
+**Also corrected in the README, each verified against code rather than assumed:**
+- **Phase 1/2 status rows.** Discovery blockers are cleared (108-subject manifest exists, `C11121140` excluded for a malformed filename), and the CNN↔fusion plumbing now connects end to end.
+- **Three "open correctness issues" that are closed.** Missing Phase 2 plumbing (`collect_oof_predictions` exists), the never-evaluated test split (`evaluate_on_test` exists at `train_yolo_cls.py:264`), and the Windows case-insensitive glob duplicate (deduped by normalised path in `subject_split.py`). Checked each in the source before removing the claim, and added all three to "Real problems found and solved" as items 19–21 rather than dropping them — the intro to that open-issues list promises resolved items move there, and leaving a false promise in a truth pass would have been its own joke. §6R — CV optimistic bias — is the one item on that list still genuinely open, and is now tagged with its ID.
+- **"What's next" items 1, 2 and 3.** Two were already done (clear the discovery blockers, recover `PROJECT.md`), and the third still listed the ICA no-op and TBR units bug as pending when both are fixed.
+
+**A fourth false reference, flagged rather than fixed:** the README pointed at `docs/STUDY_GUIDE.md` in its second paragraph and in the repo-layout block. That file has never existed — `docs/` contains only `jira_board.md`. Writing the study guide is real work, not a docs correction, so both references now say it has not been written yet. Deleting them silently would have hidden a gap instead of recording it.
+
+- **Next:** unchanged — (1) `build_dataset.py` at cohort scale on the 108-subject manifest; (2) the reduced smoke run; (3) §6R inner-validation fix; (4) the Gamma/2×2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).

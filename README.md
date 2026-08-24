@@ -2,9 +2,9 @@
 
 YOLO-based image classification framework for pediatric ADHD screening from EEG/ERP signals — converted to 2D scalograms, topographic heatmaps, and EC/EO coherence maps, classified with `yolov8n-cls`, explained with Grad-CAM, and fused with classical EEG biomarkers via a logistic-regression meta-classifier. Built as both a research project (thesis-grade methodology) and an engineering portfolio piece (FastAPI backend, Docker, AWS deployment).
 
-Full methodology, decisions, and roadmap: see `PROJECT.md`. Session-by-session log: see `PROGRESS.md`. Background science — EEG, spectral analysis, the ADHD biomarker literature, evaluation methodology: see `docs/STUDY_GUIDE.md`. This file is the high-level orientation — what the project is, where it stands, and what's next.
+Full methodology, decisions, and roadmap: see `PROJECT.md` (its §6a indexes the §6X work IDs used throughout the log). Session-by-session log: see `PROGRESS.md`. This file is the high-level orientation — what the project is, where it stands, and what's next. A `docs/STUDY_GUIDE.md` covering the background science — EEG, spectral analysis, the ADHD biomarker literature, evaluation methodology — is referenced in places but **has not been written yet**.
 
-> **`PROJECT.md` is currently broken.** The file in the repo is a truncated copy of `PROGRESS.md`, not the methodology document. Every module cites sections of it (`sec 4 step 3`, `sec 5a`, `sec 6 Phase 2`) that don't exist in the file as committed. Recover it from git history before relying on any cross-reference. Tracked in `PROGRESS.md` (2026-08-23).
+> **`PROJECT.md` section 6 uses identifiers that were never defined.** The methodology document itself is intact (recovered in `93cfcc5`) — the earlier "truncated copy of PROGRESS.md" warning no longer applies. What is still missing is the lettered work-item list: `PROGRESS.md` cites §6H, §6J, §6M, §6N, §6O, §6P, §6Q, §6R and §6T as its canonical work IDs, and none of them had a definition anywhere in the repo. `PROJECT.md` §6a now carries a table reconstructed from how each ID is used in the log — accurate to the work, but not recovered from the original wording.
 
 ---
 
@@ -31,13 +31,13 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | 🟡 Artifact rejection and TBR band power now fixed; scalogram normalization still open. **All previously generated images and features are stale** and must be regenerated |
-| 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built; **CNN↔fusion plumbing is missing**; classical half currently at chance; real full-scale run pending |
+| 1 — Data pipeline | 🟡 Discovery blockers cleared — a real 108-subject manifest exists. Artifact rejection, TBR band power, topomap grid layout and epoch capping all fixed; scalogram normalization (§6H) still open. **Images have never been generated at cohort scale**, and anything generated earlier is stale |
+| 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built and the CNN↔fusion plumbing now connects end to end (§6P, §6Q). Remaining: CV accuracy is still optimistically biased (§6R), the classical half is at chance, and no real full-scale run has happened |
 | 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
 | 4 — Literature review + paper writing | ⬜ Not started |
 | 5 — Backend, dashboard, AWS deployment | 🟡 `/predict` endpoint built and tested against a toy model; everything else not started |
 
-**Full 103-subject dataset located** (`D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files) — the single biggest blocker since mid-August is resolved. Two discovery issues need clearing first: the 109-vs-103 file count discrepancy, and case-insensitive globbing on Windows. Both trip `discover_subjects`'s duplicate-ID guard.
+**Full dataset located and discovered** (`D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files) — the single biggest blocker since mid-August is resolved, and both follow-on discovery issues are now cleared: the case-insensitive glob duplicate is deduped by normalised path, and the 109-vs-103 count resolved to **108 usable subjects**, with `C11121140` flagged and excluded for a malformed filename. What to do about that one subject is still open.
 
 ### What's built
 
@@ -57,15 +57,12 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 
 ## Open correctness issues
 
-These were found by running code against real data, not by reading it. All are unresolved as of this commit.
+These were found by running code against real data, not by reading it. Items resolved since are listed under "Real problems found and solved" below rather than deleted, so the record of what broke stays intact.
 
 1. **All generated images and classical features are stale.** They were produced before artifact rejection existed, and must be regenerated. Epoch counts per subject will drop by differing amounts, so the condition balance needs re-measuring too.
 2. **No QC policy for problem subjects.** The pipeline now warns above 30% epoch rejection and flags subjects where ICA component removal hits the cap, but there's no rule for whether to include, exclude, or flag them. **F09080101 specifically needs manual inspection** — muscle detection flags 14 of its 19 components at MNE's default threshold, meaning its decomposition is dominated by high-frequency structure. Needs deciding before Phase 2.
 3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
-4. **Missing Phase 2 plumbing.** `train_yolo_cls.run_cv()` computes per-subject out-of-fold probabilities and discards them, but `fusion_classifier.run_fusion_cv()` requires them as input. No code path connects the two halves.
-5. **The held-out test split is never evaluated.** `run_cv` filters it out and no `evaluate_on_test()` exists — the two-stage design in `subject_split.py` has no consumer.
-6. **CV accuracy will be optimistically biased.** Ultralytics selects `best.pt` by accuracy on the val fold, and evaluation then scores on that same fold.
-7. **Windows discovery bugs.** `discover_subjects` globs both `.edf` and `.EDF`; on a case-insensitive filesystem both match the same files, producing a duplicate for every subject and tripping the duplicate-ID guard.
+4. **CV accuracy will be optimistically biased (§6R).** Ultralytics selects `best.pt` by accuracy on the val fold, and evaluation then scores on that same fold. `evaluate_on_test()` already avoids this for the final model via an inner validation fold; the CV loop itself still needs the same treatment.
 
 ## Real problems found and solved
 
@@ -87,6 +84,9 @@ These were found by running code against real data, not by reading it. All are u
 16. **Both artifact thresholds were guesses from literature, and both were wrong.** 150 µV peak-to-peak rejected 100% of epochs; measuring the actual post-ICA distribution showed the bulk ends near 170 µV with real artifact past 500, so 250 µV is the defensible choice. MNE's default muscle-detection threshold (0.5) removed 14 of 19 ICA components on one subject. Fixed by measuring rather than re-guessing (`training/sweep_muscle_threshold.py`).
 17. **`remove_artifacts_ica()` was a no-op** — `ica.apply()` with an empty exclude list reconstructs the signal bit-identically, so a full ICA fit per recording changed nothing. Combined with a missing `reject` parameter in epoching, the pipeline had *zero* artifact rejection. Fixed with EOG detection (Fp1/Fp2 proxies), muscle detection, and peak-to-peak epoch rejection.
 18. **`parse_filename`'s regex matched zero real files** — it required underscores in the date/time; the dataset uses dots. Would have raised on the first file of the 103-subject run. The docstring documented the wrong convention, which is how it survived. Fixed to accept `[._-]`.
+19. **`run_cv()` computed out-of-fold probabilities and threw them away** — `fusion_classifier.run_fusion_cv()` required exactly those as input, so the CNN and fusion halves of Phase 2 had no connecting code path at all. Fixed with `collect_oof_predictions()`, written per-representation because the CNN probability differs between the scalogram and topomap models and fusing against the wrong file would mismatch silently rather than error.
+20. **The held-out test split had no consumer.** `subject_split.py` had carved out a stratified test set since 2026-08-16; `run_cv()` only ever filtered it out. Fixed with `evaluate_on_test()`. The trap it had to avoid: Ultralytics picks `best.pt` by accuracy on whatever it gets as `val`, so passing it the test split would be selection-on-test — the final model takes an inner validation fold from dev instead, and the function raises if asked to use `test` for it.
+21. **Case-insensitive globbing produced a duplicate for every subject.** `discover_subjects` globbed both `.edf` and `.EDF`; on Windows both match the same files, tripping the duplicate-ID guard and blocking the cohort run for four sessions. Fixed by deduping on `os.path.normcase(os.path.abspath(path))`.
 
 None of this was visible from reading the paper or the dataset README — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
 
@@ -142,11 +142,11 @@ This is an independent replication, on this dataset, of the 2020 five-algorithm 
 
 ## What's next
 
-1. **Clear the discovery blockers** — resolve the 109-vs-103 file count and the case-insensitive glob duplicate, so `subject_split.py` can run on the real cohort.
-2. **Recover `PROJECT.md`** from git history — it holds the locked design decisions and limitations the paper depends on.
-3. **Fix the pipeline correctness issues** — ICA no-op, TBR units + continuous-signal PSD, scalogram normalization — *before* generating images at scale, since each one invalidates already-generated output.
+1. **Generate images at cohort scale** — `build_dataset.py` has still never been run on the 108-subject manifest. Now unblocked by epoch capping (§6T), which is what makes a CPU run tractable at all.
+2. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against real generated images rather than synthetic ones.
+3. **Fix the remaining pipeline correctness issues** — scalogram normalization (§6H) and computing TBR on the continuous segment rather than 1.5 s epochs. The ICA no-op and the TBR band-power units bug are both fixed. Do these *before* generating images at scale, since each one invalidates already-generated output.
 4. **Expand the classical feature set** — relative band power per channel per condition, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries. Now critical path.
-5. **Close the Phase 2 plumbing gaps** — save out-of-fold CNN probabilities, write `evaluate_on_test()`, add an inner validation split so epoch selection stops leaking.
+5. **Close the last Phase 2 gap** — add an inner validation split to the CV loop (§6R) so epoch selection stops leaking. Out-of-fold probabilities (§6P) and held-out test evaluation (§6Q) are both done.
 6. **Phase 2 — the critical checkpoint:** real subject-wise 5-fold CV for all three approaches, with significance tests against 75.8% and 84.5%.
 7. **Phase 3** — Grad-CAM and clinical-plausibility against the real trained model.
 8. **Phase 4** — literature review, paper writing.
@@ -180,7 +180,7 @@ adhd-yolo/
 ├── frontend/                        # dashboard (Phase 5)
 ├── notebooks/                       # exploratory work
 ├── docs/
-│   ├── STUDY_GUIDE.md               # the science: EEG, spectral analysis, ML, stats
+│   ├── STUDY_GUIDE.md               # the science: EEG, spectral analysis, ML, stats  [NOT WRITTEN YET]
 │   └── jira_board.md                # epic/story breakdown
 └── docker-compose.yml               # local dev, portable to EC2 later
 ```
