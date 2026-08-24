@@ -11,7 +11,6 @@ mne-connectivity==0.7.0
 
 # ML
 torch==2.3.1
-ultralytics==8.2.31
 xgboost==2.0.3
 
 # Backend API
