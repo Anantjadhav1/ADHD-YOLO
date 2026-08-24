@@ -41,6 +41,71 @@ RANDOM_SEED_DEFAULT = 42
 DEFAULT_TEST_SIZE = 0.15
 DEFAULT_N_FOLDS = 5
 
+# Where the raw .edf files live. Set once per machine:
+#   PowerShell:  $env:ADHD_YOLO_DATA_ROOT = "D:\ADHD-Faezeh Rohani-edf"
+#   bash:        export ADHD_YOLO_DATA_ROOT="/data/adhd"
+# Named to match ADHD_YOLO_MODEL_PATH, which backend/app/main.py already uses.
+#
+# The manifest stores paths RELATIVE to this root rather than absolute ones.
+# Absolute paths bake one machine's layout into a file that is meant to be the
+# single source of truth for which child is in which fold -- so the manifest
+# either could not be committed (losing reproducibility of the fold assignment,
+# which subject_split.py's whole "never regenerate" design depends on) or had to
+# be committed with someone's local drive letter in every row. Relative paths
+# plus a root resolved at load time gives both.
+DATA_ROOT_ENV = "ADHD_YOLO_DATA_ROOT"
+
+
+def resolve_data_root(explicit: str | None = None) -> str:
+    """
+    The raw-data root: an explicit argument wins, otherwise $ADHD_YOLO_DATA_ROOT.
+
+    Raises rather than guessing. A wrong root produces a manifest full of paths
+    that don't exist, which surfaces much later as a confusing per-subject load
+    failure in the middle of a batch run.
+    """
+    root = explicit or os.environ.get(DATA_ROOT_ENV)
+    if not root:
+        raise SystemExit(
+            f"No data root. Pass --data-dir, or set {DATA_ROOT_ENV}:\n"
+            f'  PowerShell:  $env:{DATA_ROOT_ENV} = "D:\\ADHD-Faezeh Rohani-edf"\n'
+            f'  bash:        export {DATA_ROOT_ENV}="/path/to/edf"'
+        )
+    if not os.path.isdir(root):
+        raise SystemExit(f"Data root does not exist: {root}")
+    return os.path.abspath(root)
+
+
+def to_relative(path: str, data_root: str) -> str:
+    """
+    Store a discovered file as a root-relative POSIX path.
+
+    POSIX separators specifically: a manifest written on Windows with
+    backslashes is unreadable as a path on Linux, and this file is meant to be
+    committable and shared.
+    """
+    return Path(os.path.relpath(os.path.abspath(path), os.path.abspath(data_root))).as_posix()
+
+
+def to_absolute(path: str, data_root: str | None) -> str:
+    """
+    Resolve a manifest path back to something openable.
+
+    Absolute paths are passed through unchanged so manifests generated before
+    this change keep working -- they are just not portable off the machine that
+    produced them.
+    """
+    if not isinstance(path, str) or not path:
+        return path
+    if os.path.isabs(path):
+        return path
+    if data_root is None:
+        raise SystemExit(
+            f"Manifest uses relative paths but no data root is configured. "
+            f"Set {DATA_ROOT_ENV}, or pass data_root= to load_manifest()."
+        )
+    return os.path.normpath(os.path.join(data_root, path))
+
 
 @dataclass
 class SubjectRecord:
@@ -109,8 +174,8 @@ def discover_subjects(data_dir: str, pattern: str = "*-EOEC.edf") -> list[Subjec
         subjects[sf.subject_id] = SubjectRecord(
             subject_id=sf.subject_id,
             group=sf.group,
-            eoec_path=path,
-            vcpt_path=vcpt_candidates[0] if vcpt_candidates else None,
+            eoec_path=to_relative(path, data_dir),
+            vcpt_path=to_relative(vcpt_candidates[0], data_dir) if vcpt_candidates else None,
         )
     return list(subjects.values())
 
@@ -185,11 +250,32 @@ def save_manifest(manifest: pd.DataFrame, output_path: str) -> None:
     manifest.to_csv(output_path, index=False)
 
 
-def load_manifest(path: str) -> pd.DataFrame:
+def load_manifest(path: str, data_root: str | None = None) -> pd.DataFrame:
     """Downstream scripts (image_conversion.py, training, fusion) should call
     this rather than re-deriving splits, so every representation and every
-    model uses the same subject -> split mapping."""
-    return pd.read_csv(path)
+    model uses the same subject -> split mapping.
+
+    Path columns are resolved to absolute paths here, so every caller keeps
+    receiving openable paths and none of them needed changing. `data_root`
+    defaults to $ADHD_YOLO_DATA_ROOT; it is only required if the manifest
+    actually contains relative paths.
+    """
+    manifest = pd.read_csv(path)
+
+    root = data_root or os.environ.get(DATA_ROOT_ENV)
+    if root:
+        root = os.path.abspath(root)
+
+    for col in ("eoec_path", "vcpt_path"):
+        if col in manifest.columns:
+            # NaN is truthy as a float and must not reach os.path -- the same
+            # trap already recorded for vcpt_path in "Real problems found and
+            # solved" #11.
+            manifest[col] = manifest[col].apply(
+                lambda p: p if not isinstance(p, str) or not p else to_absolute(p, root)
+            )
+
+    return manifest
 
 
 def get_split_for_subject(manifest: pd.DataFrame, subject_id: str) -> str:
@@ -231,9 +317,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--data-dir", type=str, default=None,
-        help="Directory containing raw .edf files. Omit to run a DRY RUN on synthetic "
-             "subject IDs (49 ADHD / 54 Control, matching the real cohort's class balance) "
-             "to sanity-check the split logic before the real dataset is available.",
+        help=f"Directory containing raw .edf files. Defaults to ${DATA_ROOT_ENV} if set. "
+             "Paths are stored in the manifest RELATIVE to this directory, so the manifest "
+             "is portable and committable. Pass --dry-run to sanity-check the split logic "
+             "on synthetic subject IDs without any data.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Run on synthetic subject IDs (49 ADHD / 54 Control, matching the real cohort's "
+             "class balance) to validate the split logic without a dataset.",
     )
     parser.add_argument("--output", type=str, default="data_pipeline/splits/subject_splits.csv")
     parser.add_argument("--test-size", type=float, default=DEFAULT_TEST_SIZE)
@@ -241,16 +333,21 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=RANDOM_SEED_DEFAULT)
     args = parser.parse_args()
 
-    if args.data_dir:
-        subjects = discover_subjects(args.data_dir)
-        if not subjects:
-            raise SystemExit(f"No *-EOEC.edf files found under {args.data_dir}")
-        df = subjects_to_frame(subjects)
-        print(f"Discovered {len(df)} subjects from {args.data_dir}")
-    else:
-        print("No --data-dir given -- running a DRY RUN on synthetic subject IDs.")
-        print("This validates the split logic only. Re-run with --data-dir once the real dataset is available.\n")
+    # Dry run is now explicit. Previously it was what you got by omitting
+    # --data-dir, which meant a forgotten flag silently produced a manifest of
+    # synthetic subject IDs that looks exactly like a real one on disk.
+    if args.dry_run:
+        print("DRY RUN on synthetic subject IDs -- validates the split logic only.")
+        print(f"Re-run with --data-dir or ${DATA_ROOT_ENV} to build a real manifest.\n")
         df = _make_synthetic_subjects(seed=args.seed)
+    else:
+        data_root = resolve_data_root(args.data_dir)
+        subjects = discover_subjects(data_root)
+        if not subjects:
+            raise SystemExit(f"No *-EOEC.edf files found under {data_root}")
+        df = subjects_to_frame(subjects)
+        print(f"Discovered {len(df)} subjects from {data_root}")
+        print(f"Manifest paths are relative to that root, resolved via ${DATA_ROOT_ENV} on load.")
 
     manifest = make_splits(df, test_size=args.test_size, n_folds=args.n_folds, seed=args.seed)
     verify_no_leakage(manifest)

@@ -209,6 +209,14 @@ Health check: `http://localhost:8000/health`
 
 **Windows note:** if `python`/`python3` resolve to an MSYS2 install (`C:\msys64\...`), packages installed by `pip` won't be visible. Use `py -m ...` or activate a venv. `where` in PowerShell is an alias for `Where-Object` — use `Get-Command python -All` to inspect.
 
+**Data root:** the raw `.edf` files are not in the repo. Point `$ADHD_YOLO_DATA_ROOT` at them once per machine:
+
+```powershell
+$env:ADHD_YOLO_DATA_ROOT = "D:\ADHD-Faezeh Rohani-edf"
+```
+
+`data_pipeline/splits/subject_splits.csv` stores paths **relative** to that root and is tracked in git — it is the single source of truth for which child is in which fold, and `subject_split.py` is designed never to regenerate it (regenerating reshuffles folds and invalidates any result computed against the old one). `load_manifest()` resolves those paths back to absolute ones at read time, so every downstream script keeps receiving openable paths. A manifest that still contains absolute paths continues to load unchanged; it is just not portable to another machine.
+
 **Import note:** `data_pipeline` and `training` scripts use package-relative imports and must be run as `python -m data_pipeline.<script>` from the repo root, not `python data_pipeline/<script>.py`.
 
 ## Workflow

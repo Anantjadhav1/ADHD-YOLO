@@ -20,3 +20,11 @@ venv/
 
 # OS
 .DS_Store
+
+# Generated diagnostics. subject_splits.csv is deliberately NOT here: it is the
+# single source of truth for which child is in which fold, and subject_split.py
+# is designed never to regenerate it, so it has to be tracked. It stores paths
+# relative to $ADHD_YOLO_DATA_ROOT rather than absolute ones, so tracking it
+# does not bake one machine's layout into the repo.
+data_pipeline/splits/rejection_audit.csv
+data_pipeline/images/
