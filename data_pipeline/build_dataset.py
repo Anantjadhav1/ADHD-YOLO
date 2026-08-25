@@ -36,6 +36,40 @@ from data_pipeline import subject_split
 from data_pipeline.image_conversion import process_subject_from_manifest
 from data_pipeline.preprocessing import preprocess_subject
 
+# Validated EC/EO boundaries from training/find_ec_eo_boundary.py, run POST-ICA
+# so it measures the same signal split_eoec_by_alpha sees. Only rows marked
+# `trusted` are used -- trusted means the boundary passed all three checks:
+# permutation p<0.05, split-half |O1-O2|<=0.08, AND a physically plausible
+# 0.25-0.75 position. That third one is load-bearing: 19 subjects passed both
+# STATISTICAL tests with boundaries at 0.10 or 0.89, putting one condition
+# under a minute of an 8-minute recording.
+#
+# NOT applied wholesale. Trusted-only median is 0.537 against the assumed
+# 0.500 (Wilcoxon p<0.00001) -- real, but ~18 s of misplacement, and the
+# detector validates for only 64/108 subjects. Regenerating 122k images for
+# that was not worth 5 hours. It is used for subjects the midpoint rule
+# FLAGGED AS AMBIGUOUS and whose boundary is trusted; everyone else keeps the
+# midpoint, and build_log.csv records which rule each subject got.
+DEFAULT_BOUNDARIES_CSV = "docs/ec_eo_boundaries_postica.csv"
+
+LOG_FIELDS = ["subject_id", "group", "split", "status", "n_ec", "n_eo", "n_vcpt",
+              "split_rule", "boundary_frac", "detail"]
+
+
+def load_boundaries(path: str) -> dict:
+    """{subject_id: boundary_frac} for trusted boundaries only. {} if absent."""
+    if not path or not os.path.exists(path):
+        return {}
+    out = {}
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            if str(r.get("trusted", "")).strip().lower() in ("true", "1"):
+                try:
+                    out[r["subject_id"]] = float(r["boundary_frac"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return out
+
 # Cap on epochs imaged per subject per task. This is a POLICY default, not a
 # smoke-test convenience -- it is on for real runs, and there are three
 # independent reasons for it:
@@ -65,6 +99,8 @@ class SubjectResult:
     n_ec: int = 0
     n_eo: int = 0
     n_vcpt: int = 0
+    split_rule: str = ""       # "midpoint" | "detected" -- never leave this blank
+    boundary_frac: float | None = None
     detail: str = ""
 
 
@@ -75,19 +111,37 @@ def run_subject(
     output_dir: str,
     max_epochs_per_task: int | None,
     include_ambiguous: bool,
+    boundary_frac: float | None = None,
 ) -> SubjectResult:
     group, split = row["group"], row["split"]
     eoec_path = row["eoec_path"]
     vcpt_path = row["vcpt_path"] if isinstance(row["vcpt_path"], str) and row["vcpt_path"] else None
 
     try:
-        result = preprocess_subject(eoec_path, vcpt_path)
+        result = preprocess_subject(eoec_path, vcpt_path, boundary_frac=boundary_frac)
+    except ValueError as e:
+        # split_eoec_by_alpha rejects a boundary that leaves either segment too
+        # short after trimming. Fall back to the midpoint rather than dropping
+        # the subject -- the midpoint is what every other subject gets anyway.
+        if boundary_frac is None:
+            return SubjectResult(subject_id, group, split, "failed",
+                                 detail=f"preprocessing failed: {e!r}")
+        print(f"(boundary {boundary_frac:.3f} rejected, falling back to midpoint) ", end="")
+        try:
+            result = preprocess_subject(eoec_path, vcpt_path, boundary_frac=None)
+        except Exception as e2:
+            return SubjectResult(subject_id, group, split, "failed",
+                                 detail=f"preprocessing failed: {e2!r}")
     except Exception as e:
         return SubjectResult(subject_id, group, split, "failed", detail=f"preprocessing failed: {e!r}")
+
+    rule = result.get("split_rule", "midpoint")
+    bfrac = result.get("boundary_frac")
 
     if result["eoec_ambiguous"] and not include_ambiguous:
         return SubjectResult(
             subject_id, group, split, "skipped_ambiguous",
+            split_rule=rule, boundary_frac=bfrac,
             detail=f"alpha_ratio={result['alpha_ratio']:.2f} -- flagged for manual QC, not auto-processed",
         )
 
@@ -106,11 +160,15 @@ def run_subject(
             epochs_by_task, subject_id, manifest, output_dir, max_epochs=max_epochs_per_task,
         )
     except Exception as e:
-        return SubjectResult(subject_id, group, split, "failed", detail=f"image generation failed: {e!r}")
+        return SubjectResult(subject_id, group, split, "failed",
+                             split_rule=rule, boundary_frac=bfrac,
+                             detail=f"image generation failed: {e!r}")
 
     return SubjectResult(
         subject_id, group, split, "ok",
         n_ec=counts.get("EC", 0), n_eo=counts.get("EO", 0), n_vcpt=counts.get("VCPT", 0),
+        split_rule=rule, boundary_frac=bfrac,
+        detail=f"alpha_ratio={result['alpha_ratio']:.2f}",
     )
 
 
@@ -120,6 +178,7 @@ def run_batch(
     max_epochs_per_task: int | None = DEFAULT_MAX_EPOCHS_PER_TASK,
     include_ambiguous: bool = False,
     subjects_filter: list[str] | None = None,
+    boundaries_csv: str | None = DEFAULT_BOUNDARIES_CSV,
 ) -> list[SubjectResult]:
     # Default matches the CLI's on purpose. If this stayed None while the CLI
     # capped, a programmatic caller would silently build an uncapped dataset
@@ -128,7 +187,13 @@ def run_batch(
     subject_split.verify_no_leakage(manifest)  # re-check even though subject_split.py already checked once --
                                                 # catches a hand-edited manifest before it burns a batch run
 
+    boundaries = load_boundaries(boundaries_csv)
+    if boundaries:
+        print(f"Trusted EC/EO boundaries loaded for {len(boundaries)} subjects "
+              f"from {boundaries_csv}; all others split at the midpoint.")
+
     subject_ids = subjects_filter or manifest["subject_id"].tolist()
+    results = []
     results = []
     for i, subject_id in enumerate(subject_ids, 1):
         matches = manifest.loc[manifest["subject_id"] == subject_id]
@@ -138,7 +203,8 @@ def run_batch(
             continue
         row = matches.iloc[0]
         print(f"[{i}/{len(subject_ids)}] {subject_id} ({row['group']}, split={row['split']}) ... ", end="", flush=True)
-        result = run_subject(subject_id, row, manifest, output_dir, max_epochs_per_task, include_ambiguous)
+        result = run_subject(subject_id, row, manifest, output_dir, max_epochs_per_task,
+                             include_ambiguous, boundary_frac=boundaries.get(subject_id))
         print(result.status + (f" ({result.detail})" if result.status != "ok" else ""))
         results.append(result)
 
@@ -146,13 +212,45 @@ def run_batch(
 
 
 def save_log(results: list[SubjectResult], output_dir: str) -> str:
+    """
+    MERGE into build_log.csv -- never truncate it.
+
+    This used to open with "w", which was safe for a full-cohort run and
+    destructive for a partial one: a 5-subject `--subjects` rebuild wiped the
+    record of the other 103. The images survived (they are on disk and were
+    never touched) but the provenance record did not, and provenance is the
+    entire point of this file.
+
+    The general rule this is an instance of: any writer a partial run can
+    touch must merge by default. `--subjects` exists precisely to make partial
+    runs cheap, so a truncating writer behind it is a trap.
+    """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     log_path = os.path.join(output_dir, "build_log.csv")
+
+    existing: dict = {}
+    if os.path.exists(log_path):
+        with open(log_path, newline="") as f:
+            for r in csv.DictReader(f):
+                existing[r["subject_id"]] = {k: r.get(k, "") for k in LOG_FIELDS}
+
+    for r in results:
+        existing[r.subject_id] = {
+            "subject_id": r.subject_id, "group": r.group, "split": r.split,
+            "status": r.status, "n_ec": r.n_ec, "n_eo": r.n_eo, "n_vcpt": r.n_vcpt,
+            "split_rule": r.split_rule,
+            "boundary_frac": "" if r.boundary_frac is None else f"{r.boundary_frac:.4f}",
+            "detail": r.detail,
+        }
+
     with open(log_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["subject_id", "group", "split", "status", "n_ec", "n_eo", "n_vcpt", "detail"])
-        for r in results:
-            writer.writerow([r.subject_id, r.group, r.split, r.status, r.n_ec, r.n_eo, r.n_vcpt, r.detail])
+        writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+        writer.writeheader()
+        for sid in sorted(existing):
+            writer.writerow(existing[sid])
+
+    print(f"  build_log.csv now holds {len(existing)} subjects "
+          f"({len(results)} updated by this run)")
     return log_path
 
 
@@ -210,6 +308,11 @@ def main() -> None:
         "--subjects", type=str, nargs="*", default=None,
         help="Optional: process only these subject_ids (e.g. to re-run subjects that failed last time).",
     )
+    parser.add_argument(
+        "--boundaries-csv", type=str, default=DEFAULT_BOUNDARIES_CSV,
+        help="Validated EC/EO boundaries from find_ec_eo_boundary.py. Only rows marked "
+             "trusted are used; everyone else splits at the midpoint. Pass '' to disable.",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.manifest):
@@ -231,6 +334,7 @@ def main() -> None:
         max_epochs_per_task=max_epochs_per_task,
         include_ambiguous=args.include_ambiguous,
         subjects_filter=args.subjects,
+        boundaries_csv=args.boundaries_csv,
     )
     print()
     print(summarize(results))

@@ -281,7 +281,32 @@ def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
     return raw_clean, diagnostics
 
 
-def split_eoec_by_alpha(raw: mne.io.Raw, trim_sec: float = 15.0) -> dict:
+def split_eoec_by_alpha(raw: mne.io.Raw, trim_sec: float = 15.0,
+                        boundary_frac: float | None = None) -> dict:
+    """
+    boundary_frac: split at this fraction of the recording instead of the
+        midpoint. None keeps the existing `half = n // 2` behaviour.
+
+    WHY THIS EXISTS. The midpoint is an assumption nobody checked until
+    2026-08-25. A changepoint detector run on all 108 subjects post-ICA
+    (training/find_ec_eo_boundary.py) found the trusted-only median boundary
+    at 0.537, not 0.500 -- Wilcoxon p < 0.00001. So the midpoint misplaces
+    roughly 18 s of an 8-minute recording, contaminating the EO segment with
+    eyes-closed data.
+
+    Real, but small, and the detector only validates for 64/108 subjects, so
+    it is NOT applied wholesale -- regenerating 122k images to move a boundary
+    by 3.7% was not worth 5 hours. It is used only for the five subjects the
+    midpoint rule flagged as ambiguous AND whose detected boundary passes all
+    three checks (permutation p<0.05, split-half |O1-O2|<=0.08, and inside a
+    physically plausible 0.25-0.75 range).
+
+    That third check is load-bearing: 19 subjects passed both STATISTICAL
+    tests with boundaries at 0.10 or 0.89, putting one condition under a
+    minute. A statistical test needs a physical sanity check on top of it.
+
+    Callers must record which rule was used -- see build_dataset.py.
+    """
     """
     Split a resting-state EOEC recording into eyes-closed (EC) and
     eyes-open (EO) segments using the alpha-blocking effect: occipital
@@ -298,7 +323,14 @@ def split_eoec_by_alpha(raw: mne.io.Raw, trim_sec: float = 15.0) -> dict:
     data = raw.get_data(picks=["O1", "O2"]).mean(axis=0)
     n = len(data)
     trim = int(trim_sec * sf)
-    half = n // 2
+    half = n // 2 if boundary_frac is None else int(round(boundary_frac * n))
+    # Guard: a caller-supplied fraction must still leave both segments usable.
+    if not (trim < half < n - trim):
+        raise ValueError(
+            f"boundary_frac={boundary_frac} puts the split at sample {half} of "
+            f"{n}, outside the usable range after trimming {trim_sec}s from each "
+            "end. Fall back to the midpoint for this subject."
+        )
 
     def alpha_power(seg):
         freqs, psd = welch(seg, fs=sf, nperseg=int(4 * sf))
@@ -318,8 +350,10 @@ def split_eoec_by_alpha(raw: mne.io.Raw, trim_sec: float = 15.0) -> dict:
         # reversed order for this subject — swap
         ec_raw, eo_raw = eo_raw, ec_raw
 
-    return {"ec": ec_raw, "eo": eo_raw, "alpha_ratio": ratio, "ambiguous": ambiguous}
-
+    return {"ec": ec_raw, "eo": eo_raw, "alpha_ratio": ratio,
+            "ambiguous": ambiguous,
+            "boundary_frac": half / n,
+            "split_rule": "midpoint" if boundary_frac is None else "detected"}
 
 def epoch_signal(raw: mne.io.Raw, epoch_length_sec: float = EPOCH_LENGTH_SEC,
                  reject_uv: float = REJECT_PEAK_TO_PEAK_V,
@@ -412,15 +446,23 @@ def extract_vcpt_behavioral_proxy(raw: mne.io.Raw) -> dict:
     }
 
 
-def preprocess_subject(eoec_filepath: str, vcpt_filepath: str | None = None) -> dict:
-    """Full pipeline for one subject's session."""
+def preprocess_subject(eoec_filepath: str, vcpt_filepath: str | None = None,
+                       boundary_frac: float | None = None) -> dict:
+    """Full pipeline for one subject's session.
+
+    boundary_frac: forwarded to split_eoec_by_alpha. None keeps the midpoint.
+        Only supplied for subjects whose detected boundary passed all three
+        validation checks -- see split_eoec_by_alpha's docstring.
+    """
     result = {}
 
     raw_eoec = load_raw(eoec_filepath)
     raw_eoec = filter_raw(raw_eoec)
     raw_eoec, ica_diag_eoec = remove_artifacts_ica(raw_eoec)
     result["ica_eoec"] = ica_diag_eoec
-    split = split_eoec_by_alpha(raw_eoec)
+    split = split_eoec_by_alpha(raw_eoec, boundary_frac=boundary_frac)
+    result["split_rule"] = split["split_rule"]
+    result["boundary_frac"] = split["boundary_frac"]
     # Cleaned CONTINUOUS segments, kept alongside the epoched versions.
     # Coherence needs a different window length than the image pipeline (see
     # image_conversion.COHERENCE_WINDOW_SEC): at 1.5 s, MNE reports
