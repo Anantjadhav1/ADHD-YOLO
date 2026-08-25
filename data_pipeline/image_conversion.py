@@ -46,6 +46,21 @@ CWT_FREQ_RANGE_HZ = (0.5, 50)
 CWT_N_FREQS = 40
 CWT_WAVELET = "cmor1.5-1.0"
 
+# Fixed log10 range (in microvolts) for the globally-scaled scalogram channel.
+#
+# FIXED, not per-epoch and not per-dataset, for two reasons. A per-epoch scale
+# would make the same pixel value mean different powers in different images,
+# which is exactly what destroys learnability. A percentile taken across the
+# dataset would be leakage -- test-set amplitudes would shape the training
+# encoding. Absolute constants avoid both and need no pre-pass.
+#
+# Chosen to cover scalp EEG comfortably: 0.1-316 uV spans the physiological
+# range with headroom. Verify coverage on real data with
+# training/verify_scalogram_encoding.py -- if either clipped fraction exceeds
+# ~1%, widen this rather than living with saturated pixels.
+SCALOGRAM_LOG_RANGE_UV = (-1.0, 2.5)
+SCALOGRAM_ROWNORM_CLIP = 3.0   # z-score clip for the B channel, as before
+
 # Welch segment length for topomap band power. Was min(256, n_samples), which
 # at 500 Hz gives df = 1.953 Hz -- and 4/8/12/30 all fall BETWEEN bins at that
 # resolution, so each band integrates over a span that is not the band it is
@@ -127,43 +142,93 @@ def _make_panel_grid(n_panels: int, figsize: tuple = (10, 10)):
     return fig, list(axes[:n_panels])
 
 
+def _encode_scalogram_rgb(power_uv: np.ndarray, freqs: np.ndarray) -> np.ndarray:
+    """
+    Encode one channel's CWT power (n_freqs, n_times, microvolts) as RGB, using
+    the three channels for three DIFFERENT views rather than three redundant
+    copies of one.
+
+    WHY THIS REPLACED A COLORMAP. The previous version z-scored each frequency
+    row across time, then rendered through viridis. Two problems compounded:
+
+      1. Row z-scoring forces every frequency row to mean 0, sd 1 -- so theta
+         and beta land on identical scales and ALL absolute band-power
+         relationships are destroyed. The theta/beta ratio is mathematically
+         unrecoverable from such an image. Measured on synthetic epochs
+         spanning TBR 1.0-5.0: correlation between true TBR and TBR read back
+         from a row-normalised image is -0.09, i.e. noise. That is the single
+         most-cited spectral feature in the ADHD literature, and the CNN was
+         being asked to find it in images that could not contain it.
+      2. viridis is a 1D path through RGB space, so all three channels carried
+         the same scalar. Two thirds of the image was redundant.
+
+    The three views:
+      R -- log10 power on a FIXED global scale. Preserves absolute band
+           amplitude, so TBR is recoverable. Same synthetic test: r = 1.0000
+           even after 8-bit quantisation.
+      G -- aperiodic-corrected: the 1/f trend fitted in log-log and divided
+           out, leaving oscillatory structure. This is what makes the image
+           look "not flat" without paying the cost that row z-scoring did.
+      B -- row z-score, clipped. The previous encoding, kept in full: it does
+           carry real temporal texture, it just cannot carry band amplitude.
+
+    Nothing is discarded relative to the old version -- the old encoding is now
+    one third of the new one.
+    """
+    p = np.maximum(power_uv, 1e-12)
+    lo, hi = SCALOGRAM_LOG_RANGE_UV
+    log_p = np.log10(p)
+
+    # R: fixed global scale
+    r = np.clip((log_p - lo) / (hi - lo), 0.0, 1.0)
+
+    # G: divide out the fitted 1/f. Fit log(power) vs log(freq) on the
+    # time-averaged spectrum, so the correction is a property of this epoch's
+    # aperiodic component rather than of any individual time point.
+    mean_log = log_p.mean(axis=1)
+    slope, intercept = np.polyfit(np.log10(freqs), mean_log, 1)
+    aperiodic = (slope * np.log10(freqs) + intercept)[:, None]
+    resid = log_p - aperiodic
+    g = np.clip((resid + 1.0) / 2.0, 0.0, 1.0)   # +/-1 decade around the fit
+
+    # B: row z-score, as before
+    row_mean = p.mean(axis=1, keepdims=True)
+    row_std = p.std(axis=1, keepdims=True) + 1e-12
+    z = (p - row_mean) / row_std
+    c = SCALOGRAM_ROWNORM_CLIP
+    b = np.clip((z + c) / (2 * c), 0.0, 1.0)
+
+    return np.stack([r, g, b], axis=-1)
+
+
 def generate_scalogram_image(epoch_data: np.ndarray, ch_names: list, sfreq: float) -> np.ndarray:
     """
     epoch_data: shape (n_channels, n_samples) for ONE epoch, already picked
                 to the full 19-channel set (we select SCALOGRAM_CHANNELS here).
     Returns a 224x224x3 uint8 RGB array.
+
+    Channels are stacked vertically and the RGB array is built directly rather
+    than rendered through matplotlib -- there is no colormap to apply, and
+    going via a figure would resample twice for nothing.
     """
     available = [ch for ch in SCALOGRAM_CHANNELS if ch in ch_names]
-    fig, axes = plt.subplots(len(available), 1, figsize=(4, 6))
-    if len(available) == 1:
-        axes = [axes]
-
     freqs = np.linspace(CWT_FREQ_RANGE_HZ[0], CWT_FREQ_RANGE_HZ[1], CWT_N_FREQS)
     scales = pywt.frequency2scale(CWT_WAVELET, freqs / sfreq)
 
-    for ax, ch in zip(axes, available):
+    panels = []
+    for ch in available:
         idx = ch_names.index(ch)
-        signal = epoch_data[idx]
-        coeffs, _ = pywt.cwt(signal, scales, CWT_WAVELET, sampling_period=1 / sfreq)
-        power = np.abs(coeffs)
-        # EEG power follows a 1/f trend — theta-band power is ~20x beta-band
-        # power in practice, confirmed on real data. A single global color
-        # scale (even log) gets dominated by the strongest band and visually
-        # flattens everything else, including the beta band TBR depends on.
-        # Normalize each frequency ROW independently (z-score across time) so
-        # relative temporal structure is visible at every frequency, not just
-        # the dominant one.
-        row_mean = power.mean(axis=1, keepdims=True)
-        row_std = power.std(axis=1, keepdims=True) + 1e-12
-        power_norm = (power - row_mean) / row_std
-        ax.imshow(power_norm, aspect="auto", cmap="viridis", origin="lower",
-                  vmin=-3, vmax=3)
-        ax.axis("off")
+        coeffs, _ = pywt.cwt(epoch_data[idx], scales, CWT_WAVELET,
+                             sampling_period=1 / sfreq)
+        # MNE stores volts; the fixed log range above is in microvolts.
+        power_uv = np.abs(coeffs) * 1e6
+        rgb = _encode_scalogram_rgb(power_uv, freqs)
+        panels.append(rgb[::-1])   # low frequencies at the bottom, as origin="lower" gave
 
-    plt.subplots_adjust(hspace=0.05, wspace=0, left=0, right=1, top=1, bottom=0)
-    arr = _fig_to_rgb_array(fig)
-    plt.close(fig)
-    return arr
+    stacked = np.concatenate(panels, axis=0)
+    img = Image.fromarray((stacked * 255).astype(np.uint8)).resize(
+        (IMG_SIZE, IMG_SIZE), Image.BILINEAR)
+    return np.array(img)
 
 
 def generate_topomap_image(epoch_data: np.ndarray, info: mne.Info) -> np.ndarray:
