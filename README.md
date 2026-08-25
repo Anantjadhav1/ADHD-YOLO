@@ -31,13 +31,19 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | 🟡 Discovery blockers cleared — a real 108-subject manifest exists. Artifact rejection, TBR band power, topomap grid layout and epoch capping all fixed; scalogram normalization (§6H) still open. **Images have never been generated at cohort scale**, and anything generated earlier is stale |
-| 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built and the CNN↔fusion plumbing now connects end to end (§6P, §6Q). Remaining: CV accuracy is still optimistically biased (§6R), the classical half is at chance, and no real full-scale run has happened |
+| 1 — Data pipeline | ✅ **Cohort dataset built** — 108 subjects processed, 99 ok / 9 skipped ambiguous / 0 failed, ~122,000 images in ~5 hours. Artifact rejection, TBR band power, topomap grid layout, epoch capping, coherence windowing and scalogram normalization all fixed before the run. One open question gates training: see the ICA/alpha note below |
+| 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built and the CNN↔fusion plumbing connects end to end (§6P, §6Q). Real images now exist to train on. Remaining: CV accuracy is still optimistically biased (§6R), the classical half is at chance, and no real training run has happened |
 | 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
 | 4 — Literature review + paper writing | ⬜ Not started |
 | 5 — Backend, dashboard, AWS deployment | 🟡 `/predict` endpoint built and tested against a toy model; everything else not started |
 
-**Full dataset located and discovered** (`D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files) — the single biggest blocker since mid-August is resolved, and both follow-on discovery issues are now cleared: the case-insensitive glob duplicate is deduped by normalised path, and the 109-vs-103 count resolved to **108 usable subjects**, with `C11121140` flagged and excluded for a malformed filename. What to do about that one subject is still open.
+**Full dataset located, discovered and processed** (`D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files). The 109-vs-103 count resolved to **108 usable subjects** (52 ADHD / 56 Control), with `C11121140` excluded for a malformed filename. The cohort still exceeds the paper's 103 (49/54) by five subjects, unexplained and with no demographics file shipped; results are reported on 108 with the deviation stated, noting the 75.8%/84.5% baseline was computed on 103.
+
+**Subject ages were recovered from the ID encoding.** IDs decompose as `[C|F]YYMMDDNN` — birth date plus serial — and the recording date is in the filename, so age is derivable despite the missing demographics file. All 108 parse and every age falls in 6.1–11.1 years. **Groups are age-matched: ADHD 8.29 ± 1.22 y, Control 8.43 ± 1.04 y, Mann-Whitney p = 0.50.** This matters: slow-wave power falls and alpha peak frequency rises with age, so an age difference would have made "elevated theta in ADHD" partly "younger children". Ages are *derived* from an inferred scheme, not read from a file — stated as such in the methods.
+
+**Test split is 14 of 17 usable.** Fourteen subjects were skipped by the EC/EO ambiguity rule, four of them in the test split; five were recovered using validated changepoint boundaries (see below). At n=14 the 95% CI on accuracy is roughly ±24 points, which constrains what the final result can claim.
+
+> ⚠️ **One question gates training.** Occipital alpha contrast changes drastically across ICA for some subjects — C10050113 3.60 → 0.66, F09080101 1.44 → 0.15, but C12021125 6.22 → 170.74. Alpha blocking is among the most robust effects in electrophysiology; if it vanishes after ICA, ICA removed it. That would affect the EC/EO split, every generated image, and TBR. Unresolved, and the next investigation.
 
 ### What's built
 
@@ -89,7 +95,21 @@ These were found by running code against real data, not by reading it. Items res
 21. **Case-insensitive globbing produced a duplicate for every subject.** `discover_subjects` globbed both `.edf` and `.EDF`; on Windows both match the same files, tripping the duplicate-ID guard and blocking the cohort run for four sessions. Fixed by deduping on `os.path.normcase(os.path.abspath(path))`.
 22. **The `LABEL` channel rejected 100% of epochs on 100% of subjects.** These files carry a digital marker channel that is constant by construction, MNE types it as `eeg`, and `flat` drops an epoch if *any* eeg channel falls below threshold — so `epoch_signal` produced empty `Epochs` for every recording and the pipeline could not generate a single image. Latent until `build_dataset.py` was first run against the real cohort. The warning blamed the 250 µV peak-to-peak threshold, which sent the first investigation after the threshold value; measuring showed 250 µV was keeping 57–92% of epochs, not none. Same channel as #9, one function upstream, where it was fatal rather than merely wrong. Fixed by restricting epoching to the 19 real EEG channels, as `filter_raw` and the ICA already did; the warning now names the channels actually responsible.
 
+23. **The EC/EO midpoint split was an unchecked assumption.** `split_eoec_by_alpha` always used `half = n // 2`. A changepoint detector validated post-ICA on all 108 subjects found the trusted-only median boundary at **0.537, not 0.500** (Wilcoxon p < 0.00001) — so the midpoint misplaces ~18 s of an 8-minute recording, and the bias runs one way: EO is contaminated with eyes-closed data, never the reverse. Real but small, and the detector validates for only 64/108, so it was **not** applied wholesale. `split_eoec_by_alpha` now accepts an explicit `boundary_frac`; it is supplied only for subjects the midpoint rule flagged as ambiguous *and* whose boundary passes all three checks. Five such subjects were rebuilt, taking the test split from 13 to 14.
+24. **`build_log.csv` truncated instead of merging.** Safe for a full-cohort run, destructive for a partial one — a 5-subject `--subjects` rebuild wiped the record of the other 103. Images survived; provenance did not. The general rule this is an instance of: *any writer a partial run can touch must merge by default.* `--subjects` exists to make partial runs cheap, so a truncating writer behind it is a trap. Same shape as an earlier double-build collision.
+
 None of this was visible from reading the paper or the dataset README — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
+
+### Four diagnostics, each catching an error in the one before it
+
+Resolving the EC/EO question took four attempts, and the sequence is worth recording because three of the four *looked* conclusive:
+
+1. **A second vote from frontal ocular artifact — abandoned.** 72.2% agreement against a **base rate of 92.2%**: 20 points worse than always guessing EC-first, so it carried no information. The pass threshold had been compared against 50% instead of the base rate. Kept as a group-level finding (EC halves 150.2 µV vs EO 129.6 µV, Wilcoxon p < 0.0001) — a real mechanism, too noisy to classify individuals.
+2. **Changepoint detection, pre-ICA — not evidence.** Median boundary 0.564 with a 1.44× "gain" over the midpoint. But `best_score` is the maximum over every candidate by construction, so it beats the midpoint automatically: a synthetic series with *no* changepoint scored gain 1.46×.
+3. **Two real validation tests.** A permutation null on the time-shuffled alpha profile (real p = 0.000, no-boundary p = 0.350) and split-half agreement between O1 and O2 (real 0.000–0.033, noise 0.250–0.258). Both checked on synthetic data before being trusted. The obvious version of the split-half test — "is the ratio more extreme at the detected boundary" — passed on pure noise too.
+4. **Pre-checks that fired.** ICA moves the boundary, so the validation was re-run post-ICA to measure the signal the pipeline actually splits. And six "pinned" boundaries at `MIN_SEGMENT_FRAC` turned out to be *where the search stopped*, not where the transition was.
+
+**The finding that mattered most: a statistical test needs a physical sanity check on top of it.** Four subjects passed *every* statistical test — permutation p = 0.005, split-half difference 0.000 — with boundaries putting one condition at 47–70 seconds of an 8-minute recording. Adding a plausibility range of 0.25–0.75 as an AND (not a tiebreaker) rejected **19 subjects that passed both statistical tests**.
 
 ---
 
@@ -143,9 +163,9 @@ This is an independent replication, on this dataset, of the 2020 five-algorithm 
 
 ## What's next
 
-1. **Generate images at cohort scale** — `build_dataset.py` has still never been run on the 108-subject manifest. Now unblocked by epoch capping (§6T), which is what makes a CPU run tractable at all.
-2. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against real generated images rather than synthetic ones.
-3. **Fix the remaining pipeline correctness issues** — scalogram normalization (§6H) and computing TBR on the continuous segment rather than 1.5 s epochs. The ICA no-op and the TBR band-power units bug are both fixed. Do these *before* generating images at scale, since each one invalidates already-generated output.
+1. **Resolve the ICA/alpha question** — this gates training. Occipital alpha contrast changes drastically across ICA for some subjects (C10050113 0.18×, F09080101 0.10×, C12021125 27×). Audit alpha power pre/post ICA per subject, and compute the occipital weight of every excluded component: a genuine ocular component is frontal-dominant with near-zero O1/O2 loading. If ICA is removing brain signal, every image in the dataset is affected.
+2. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against the real generated images.
+3. **Compute TBR on the continuous segment** rather than 1.5 s epochs, which cap frequency resolution at 0.67 Hz.
 4. **Expand the classical feature set** — relative band power per channel per condition, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries. Now critical path.
 5. **Close the last Phase 2 gap** — add an inner validation split to the CV loop (§6R) so epoch selection stops leaking. Out-of-fold probabilities (§6P) and held-out test evaluation (§6Q) are both done.
 6. **Phase 2 — the critical checkpoint:** real subject-wise 5-fold CV for all three approaches, with significance tests against 75.8% and 84.5%.

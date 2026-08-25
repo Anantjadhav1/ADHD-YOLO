@@ -493,3 +493,58 @@ Two of the nine (§6M, §6N) have no branch and never will — they are a limita
 **Measured cost of a cohort run**, from two timed points (cap 5 → 37 s, cap 50 → 100 s on one subject): ~0.47 s per epoch (two images each) plus ~30 s fixed per subject for load/filter/ICA on two files. At the default cap of 300 that is roughly **6 minutes per subject, ~11 hours for all 108**, producing ~150,000 images. Not started here — that is a deliberate decision, not something to kick off as a side effect.
 
 - **Next:** (1) the cohort-scale `build_dataset.py` run, now genuinely unblocked; (2) the reduced smoke run against those real images; (3) §6R inner-validation fix; (4) the QC policy for high-rejection subjects, which now has measured rates behind it; (5) the Gamma/2×2 and Delta-coherence decisions; (6) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-25 — cohort dataset built; the midpoint EC/EO assumption was wrong, but only slightly
+
+The 108-subject `build_dataset.py` run happened. **94 ok, 14 skipped ambiguous, 0 failed**, ~122,000 images, ~5 hours (not the 11 estimated — the per-subject fixed cost amortises better at scale than the two-point measurement suggested). Five image-affecting fixes landed first, deliberately, so the run would not have to be repeated.
+
+**Cohort composition settled.** 108 subjects, 52 ADHD / 56 Control, against the paper's 103 (49/54). No duplicate subject IDs — 109 EOEC files minus one malformed filename (`C11121140`). The five extras are unexplained and no demographics file ships with the dataset. Reporting on 108 and stating the deviation, noting the 75.8%/84.5% baseline was computed on 103.
+
+**Subject ages recovered from the ID encoding.** IDs decompose as `[C|F]YYMMDDNN` — birth date plus serial — and the recording date is in the filename, so age is derivable despite no demographics file. All 108 parse, and every age falls in 6.1–11.1 years, which is what a pediatric ADHD cohort should look like. **Groups are age-matched: ADHD 8.29 ± 1.22 y, Control 8.43 ± 1.04 y, Mann-Whitney p = 0.50.** This matters more than it looks: slow-wave power falls and alpha peak frequency rises with age, so an age difference would have made "elevated theta in ADHD" partly "younger children". Ages are DERIVED from an inferred scheme, not read from a file — state that in the methods.
+
+**Rejection audit across the cohort.** EC rejects systematically harder than EO (23.6% vs 14.3%, worse in 86/108 subjects). `audit_rejection.py`'s own verdict called this "penalising eyes-closed alpha" — **that verdict is wrong**, and its own evidence says so: worst-channel attribution is 87% frontal (Fp1 72, Fp2 65, F7 50, F8 48) against 13% occipital (O1 15, O2 19). That is ocular artifact, most plausibly drowsiness-related slow eye movements during several minutes of eyes-closed rest, not alpha. The verdict was inferred from the EC>EO asymmetry alone without checking which channels were responsible. Consequence: **keep 250 µV, it is catching real artifact.** Also measured: only **1.4 of 19 channels** drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch — per-channel interpolation is a real follow-up.
+
+**Condition imbalance largely fixed itself.** Rejection hits EC hardest and the epoch cap hits VCPT hardest, and they pull in opposite directions: the mix went from EC 18% / EO 18% / VCPT 65% to **EC 27% / EO 30% / VCPT 44%**. §6T is no longer the concern it was.
+
+---
+
+**The main investigation: is the EC/EO midpoint split correct?** `split_eoec_by_alpha` has always hard-coded `half = n // 2`. Nobody had checked. Four diagnostics, and **each one caught an error in the one before it.**
+
+**Attempt 1 — a second vote from frontal artifact. ABANDONED.** Since drowsiness raises frontal ocular artifact during eyes-closed, the higher-artifact half should be EC. Calibrated on the 90 subjects alpha decided clearly: **72.2% agreement against a base rate of 92.2%** (alpha says EC-first in 83/90). The vote is 20 points *worse* than always guessing EC-first, so it carries no information. The script's own 70% pass threshold was wrong — it compared against 50% instead of the base rate. **Kept as a group-level finding:** EC halves median 150.2 µV vs EO 129.6 µV, Wilcoxon p < 0.0001. The mechanism is real; a ~15% median difference against between-subject variance simply cannot classify individuals. Significant group effect, useless individual predictor.
+
+**Attempt 2 — changepoint detection, pre-ICA.** Sliding the split point and maximising |log(alpha_before/alpha_after)| gave a median boundary of **0.564**, only 34/108 inside 0.45–0.55, median 1.44× "gain" over the midpoint. Looked decisive. **It was not evidence.** `best_score` is the maximum over every candidate boundary, so it exceeds the midpoint score *by construction* — a synthetic series with no changepoint at all scored gain 1.46×. Gain alone reports the optimiser, not the data.
+
+**Attempt 3 — two validation tests, both checked on synthetic data first.** *Permutation null:* shuffle the alpha profile in time and re-detect, 200×. Destroys temporal structure while keeping the values, so it asks "is there a changepoint" not "is there variance". Real boundaries p = 0.000, no-boundary p = 0.350. *Split-half by channel:* detect on O1 alone, then O2 alone. Median |k(O1) − k(O2)| over 30 sims — real 0.000–0.033, noise 0.250–0.258. (The obvious version of this test — "is the ratio more extreme at the detected boundary" — passed on pure noise too, same selection problem.)
+
+**Attempt 4 — two pre-checks, and the gate fired.**
+- **ICA moves the boundary.** The validation ran pre-ICA; the pipeline splits post-ICA. On a 20-subject check, agreement was 15/20 = 75%. But the pass criterion used the wrong denominator: 3 of the 5 "movers" never had a *detectable* boundary in either condition (p > 0.05 both sides), and asking whether ICA moved a boundary that does not exist is not a meaningful question. Restricted to detectable boundaries: 15/17 = 88.2%. Rather than patch the threshold, the fix was structural — **re-run the whole validation post-ICA**, so it measures the signal the pipeline actually splits.
+- **The pinned boundaries were clipped, not detected.** Six subjects sat exactly at `MIN_SEGMENT_FRAC = 0.20`. Relaxing to 0.10 moved **every one** (0.137–0.146, and F10050108 to 0.097), proving 0.20 was where the search stopped, not where the transition was. `MIN_SEGMENT_FRAC` lowered to 0.10 so the constraint stops masquerading as a detection.
+
+**The finding that mattered most: a statistical test needs a physical sanity check on top of it.** Four subjects passed *every* statistical test — permutation p = 0.005, split-half difference 0.000 — with boundaries putting one condition at **47–70 seconds** of an 8-minute recording. Real signal, but not the EC/EO transition; more likely an artifact burst or a brief eye-opening. Added `PLAUSIBLE_BOUNDARY_RANGE = (0.25, 0.75)` as an AND, not a tiebreaker. On the post-ICA run it **rejected 19 subjects that passed both statistical tests.**
+
+**Final post-ICA result:**
+
+| | pre-ICA | post-ICA (correct) |
+|---|---|---|
+| trusted | 85/108 (78.7%) | **64/108 (59.3%)** |
+| trusted-only median boundary | 0.567 | **0.537** |
+| trusted-only sd | 0.127 | 0.062 |
+| flagged subjects recoverable | 9/14 | **5/14** |
+| of which test subjects | 3 | **1** |
+
+The midpoint assumption **is** wrong — Wilcoxon vs 0.5, p < 0.00001 — but the effect is roughly half what the pre-ICA run suggested: **7.4% of the EO segment is eyes-closed data**, about 18 s of an 8-minute recording, and the bias runs one way (boundary > 0.5 in the large majority, so EO is contaminated with EC and never the reverse).
+
+**Decision: do NOT regenerate the cohort.** ~5 hours to move a boundary by 3.7% for the 59% of subjects the detector validates on, gaining 1 test subject. Instead rebuilt only the **5 flagged-and-trusted subjects** at their detected boundaries — ~30 minutes, same test-set gain. Verified by the segment ratios: C10061115 300/202 (0.6096), C11080128 273/86 (0.7010), C12010138 180/300 (0.3663), C12071145 227/140 (0.6382), C12110161 112/125 (0.5203). Before the fix C10061115 came out 258/258 — exactly equal, which is a midpoint split by definition, and the tell that nothing had been applied. **Test split 13 → 14.**
+
+**Two bugs found in the rebuild itself:**
+1. **`save_log()` truncated instead of merging.** Safe for a full-cohort run, destructive for a partial one: a 5-subject `--subjects` rebuild wiped the record of the other 103. Images survived; provenance did not. Now merges. **The general rule: any writer a partial run can touch must merge by default** — `--subjects` exists to make partial runs cheap, so a truncating writer behind it is a trap. Same shape as the earlier double-build collision.
+2. **The boundary was never passed through.** `split_eoec_by_alpha` accepted `boundary_frac` and returned `split_rule`, but `build_dataset.py` read neither, so the first rebuild used the midpoint — the very split that made those subjects ambiguous.
+
+`recover_build_log.py` rebuilt the 103 lost rows. Its first version parsed `build_cohort.log` and got **0 rows**: PowerShell's `Tee-Object` writes UTF-16LE, and reading it as UTF-8 with `errors="ignore"` produced garbage rather than failing. Rewritten to reconstruct from the manifest plus image counts on disk — better sources than a terminal log, and unmanglable.
+
+**Fifth entry for the sensitivity table.** The EC/EO split point: trusted-only median 0.537 vs the assumed 0.500, p < 0.00001. Like the ICA sensitivity, it changes *labels* rather than a feature value. Note also that the pre-ICA estimate (0.567) overstated it roughly 2×.
+
+**A larger question surfaced and is unresolved.** Alpha contrast changes drastically across ICA for some subjects — C10050113 3.60 → 0.66, F09080101 1.44 → 0.15, C12091154 3.69 → 1.25, but C12021125 6.22 → 170.74. Alpha blocking is among the most robust effects in electrophysiology; if it vanishes after ICA, ICA removed it. That would affect the EC/EO split, every generated image, and TBR — everything, not just an 18-second boundary error. **This is the next investigation and it gates training.**
+
+- **Next:** (1) `audit_ica_alpha.py` — occipital alpha pre/post ICA per subject, and the occipital weight of every excluded component; a genuine ocular component is frontal-dominant with near-zero O1/O2 loading; (2) §6R inner-validation fix for the CV loop; (3) reduced smoke run against the real images; (4) Phase 2 proper.
