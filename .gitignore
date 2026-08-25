@@ -28,3 +28,7 @@ venv/
 # does not bake one machine's layout into the repo.
 data_pipeline/splits/rejection_audit.csv
 data_pipeline/images/
+
+dataset/
+dataset_test/
+build_cohort.log
