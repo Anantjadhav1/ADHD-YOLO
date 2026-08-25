@@ -61,6 +61,61 @@ DISABLE_AUGMENTATION = dict(
     erasing=0.0, auto_augment=None,
 )
 
+# Fixed seed + deterministic ops. Without this, two runs on identical data give
+# different weights, so a 2-point accuracy difference between configurations
+# cannot be distinguished from run-to-run noise -- and with 108 subjects, 2
+# points is 2 subjects. Also makes the reported result reproducible from the
+# dataset-v1 tag, which is what a reviewer will ask for.
+TRAINING_SEED = 42
+REPRODUCIBILITY = dict(seed=TRAINING_SEED, deterministic=True)
+
+
+def verify_augmentation_disabled(run_dir) -> dict:
+    """Read args.yaml from a finished run and confirm augmentation really is off.
+
+    Ultralytics silently IGNORES unknown kwargs. So if an arg in
+    DISABLE_AUGMENTATION is renamed or removed in a future version
+    (crop_fraction already was -- see the note above), augmentation quietly
+    switches back on with no error. For these images that is not cosmetic:
+    fliplr mirrors topomaps left/right, destroying the F3/F4 hemispheric
+    asymmetry, and hsv_* shifts colour in scalograms whose RED CHANNEL ENCODES
+    LOG POWER -- HSV jitter would corrupt the band amplitudes the 3-channel
+    encoding exists to preserve.
+
+    Ultralytics writes the RESOLVED config to args.yaml in every run directory.
+    That is ground truth; verify against it rather than trusting the call.
+
+    Raises if any requested setting did not take. Returns the resolved values.
+    """
+    import yaml
+    args_path = Path(run_dir) / "args.yaml"
+    if not args_path.exists():
+        raise FileNotFoundError(
+            f"No args.yaml under {run_dir} -- cannot confirm augmentation was "
+            "disabled. Ultralytics writes it on every run; if it is missing, the "
+            "run directory is not what this function was pointed at."
+        )
+    resolved = yaml.safe_load(args_path.read_text())
+
+    mismatched, absent = {}, []
+    for key, want in DISABLE_AUGMENTATION.items():
+        if key not in resolved:
+            absent.append(key)          # arg renamed/removed -> silently ignored
+        elif resolved[key] != want:
+            mismatched[key] = (want, resolved[key])
+
+    if absent or mismatched:
+        raise ValueError(
+            "Augmentation settings did not take effect.\n"
+            f"  ignored (not in args.yaml): {absent}\n"
+            f"  wrong value (want, got):    {mismatched}\n"
+            "Re-derive the arg names for this Ultralytics version -- see the "
+            "note above DISABLE_AUGMENTATION. Do NOT train through this: for "
+            "these images augmentation destroys signal rather than adding "
+            "invariance."
+        )
+    return resolved
+
 
 def subject_id_from_filename(fname: str) -> str:
     """'F08080102_EC_0000.png' -> 'F08080102'. Subject IDs are alnum-only
@@ -333,9 +388,11 @@ def evaluate_on_test(manifest_path: str, images_root: str, representation: str,
 
         model = YOLO("yolov8n-cls.pt")
         abs_output_dir = str(Path(output_dir).resolve())
+        run_name = f"{representation}_final"
         model.train(data=ds_root, epochs=epochs, imgsz=imgsz,
-                    project=abs_output_dir, name=f"{representation}_final", exist_ok=True,
-                    **DISABLE_AUGMENTATION)
+                    project=abs_output_dir, name=run_name, exist_ok=True,
+                    **DISABLE_AUGMENTATION, **REPRODUCIBILITY)
+        verify_augmentation_disabled(Path(abs_output_dir) / run_name)
 
         per_image = predict_class_dirs(model, test_dir)
 
@@ -398,9 +455,11 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
             # passing it relative silently nests output under runs/classify/<project>/
             # instead of exactly where you asked. Absolute path avoids that.
             abs_output_dir = str(Path(output_dir).resolve())
+            run_name = f"{representation}_{val_fold}"
             model.train(data=ds_root, epochs=epochs, imgsz=imgsz,
-                        project=abs_output_dir, name=f"{representation}_{val_fold}", exist_ok=True,
-                        **DISABLE_AUGMENTATION)
+                        project=abs_output_dir, name=run_name, exist_ok=True,
+                        **DISABLE_AUGMENTATION, **REPRODUCIBILITY)
+            verify_augmentation_disabled(Path(abs_output_dir) / run_name)
 
             per_image = predict_val_fold(model, ds_root)
             subj_df = aggregate_to_subject_level(per_image)
