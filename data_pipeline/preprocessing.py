@@ -186,7 +186,8 @@ def filter_raw(raw: mne.io.Raw) -> mne.io.Raw:
 
 
 def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
-                         eog_proxy: list = EOG_PROXY_CHANNELS) -> tuple:
+                         eog_proxy: list = EOG_PROXY_CHANNELS,
+                         return_ica: bool = False) -> tuple:
     """
     ICA-based artifact removal on the 19 EEG channels.
 
@@ -278,6 +279,14 @@ def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
         # over-contaminated subjects can be reviewed before Phase 2.
         "capped": len(ica.exclude) >= MAX_ICA_COMPONENTS_EXCLUDED,
     }
+    if return_ica:
+        # For diagnostics that need the component TOPOGRAPHIES, not just which
+        # indices were excluded -- e.g. checking whether an "ocular" component
+        # actually loads on O1/O2, which would mean it carries alpha rather
+        # than eye movement. Off by default so the normal return shape is
+        # unchanged; the alternative was refitting ICA in the audit, doubling
+        # the slowest step in the pipeline.
+        diagnostics["ica"] = ica
     return raw_clean, diagnostics
 
 
