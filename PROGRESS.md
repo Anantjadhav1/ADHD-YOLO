@@ -548,3 +548,51 @@ The midpoint assumption **is** wrong — Wilcoxon vs 0.5, p < 0.00001 — but th
 **A larger question surfaced and is unresolved.** Alpha contrast changes drastically across ICA for some subjects — C10050113 3.60 → 0.66, F09080101 1.44 → 0.15, C12091154 3.69 → 1.25, but C12021125 6.22 → 170.74. Alpha blocking is among the most robust effects in electrophysiology; if it vanishes after ICA, ICA removed it. That would affect the EC/EO split, every generated image, and TBR — everything, not just an 18-second boundary error. **This is the next investigation and it gates training.**
 
 - **Next:** (1) `audit_ica_alpha.py` — occipital alpha pre/post ICA per subject, and the occipital weight of every excluded component; a genuine ocular component is frontal-dominant with near-zero O1/O2 loading; (2) §6R inner-validation fix for the CV loop; (3) reduced smoke run against the real images; (4) Phase 2 proper.
+
+
+### 2026-08-25b — ICA is removing occipital alpha across most of the cohort. Do not train on this dataset.
+
+`audit_ica_alpha.py`, run on all 108 subjects. The question was whether ICA removes genuine brain signal along with artifact. It does, and more widely than the four flagged cases suggested.
+
+**Result:**
+
+| | |
+|---|---|
+| median occipital alpha retained across ICA | **0.643** |
+| subjects losing >25% | **68/108 (63%)** |
+| subjects losing >50% | **34/108 (31%)** |
+| worst | C12071142 at **0.02x** — 98% of its occipital alpha gone |
+| subjects gaining >50% | 0/108 |
+
+The median subject loses **36% of occipital alpha**. Alpha blocking is among the most robust phenomena in electrophysiology — Berger described it in 1929 and it has replicated ever since. Losing a third of it is not a preprocessing side effect to note in passing.
+
+**The measurement validates itself.** Five subjects had zero components excluded (F11071144, C12030157, C12071145, F10030105, C12110161) and every one retains **exactly 1.00x**. The metric is measuring ICA's effect, not drift in the estimator.
+
+**The mechanism is NOT occipital-dominant components.** That was the hypothesis this script was written to test, and it is wrong:
+
+- 63% of subjects are damaged, but only **9 of 313 excluded components (2.9%)** are occipital-dominant
+- `corr(components removed, alpha retained) = -0.336` — a weak dose-response, not the strong one an indiscriminate-removal story would predict
+
+**The real mechanism is component topography.** Comparing what a real artifact looks like against what is actually being removed:
+
+| | occipital weight | frontal weight |
+|---|---|---|
+| a genuine ocular component | 0.09 | 4.05 |
+| a temporal muscle component | 0.10 | 0.22 |
+| **the median component actually removed** | **0.951** | **1.000** |
+
+A weight of 1.0 in every region means **uniform** — no region dominates. The median removed component is not focal anywhere; it is spatially diffuse. Removing a diffuse component subtracts signal from every channel proportionally, so occipital alpha goes with it. **No occipital-dominant component is required to lose occipital alpha**, which is why the obvious hypothesis missed and why the correlation is weak.
+
+So `find_bads_eog` and `find_bads_muscle` are flagging components that are not focal artifacts at all. Their spectral criteria are being met by things whose spatial signature says they are not eye movement or muscle.
+
+**One piece of good news: the loss is not differential between groups.** ADHD median retention 0.629, Control 0.651, Mann-Whitney **p = 0.68**. This was the live risk — the literature reports ADHD children move more, so preprocessing damage could plausibly have landed unevenly and manufactured a between-group difference in exactly the band the biomarkers come from. It did not. The damage is real but symmetric.
+
+**A correction I owe from the previous entry.** I reported C12021125 as "alpha contrast 6.22 → 170.74, a 27x GAIN". Those were `best_score` values from the boundary detector, which **maximises** |log ratio| over every candidate split — so the two numbers were taken at different boundaries and were never comparable. Measured properly at a fixed midpoint: **5.63 → 5.40**, essentially unchanged. There is no 27x gain, and 0/108 subjects gained >50% alpha. The framing overstated a case that was not a case.
+
+**Consequence: the 122k-image dataset is compromised.** Every image was generated from ICA-cleaned signal — the scalograms, the topomaps, the coherence maps, the EC/EO split (which is *decided* by occipital alpha), and TBR. Regeneration is now required, but only after the ICA step is fixed; regenerating against the current detector would just reproduce the same damage more expensively.
+
+**Proposed fix — a topography veto, the same shape as the boundary plausibility guard.** A spectral detector needs a spatial sanity check on top of it, exactly as a statistical test needed a physical one. Concretely: refuse to exclude a component unless it is *focal in the region its detection reason implies* — an `eog` component must be frontally dominant, a `muscle` component temporally dominant — and never exclude a component whose topography is near-uniform, whatever the detector says. `docs/ica_components_audit.csv` already holds occipital and frontal weights for all 313 components, so the thresholds can be set from measured data rather than guessed. That has been the rule twice now: the two thresholds set from convention (150 µV, muscle 0.5) were both wrong; the two set from measurement were both right.
+
+**Also still open:** the earlier finding that only **1.4 of 19 channels** drive epoch rejection. Whole-epoch rejection discards ~17 clean channels per rejected epoch, and per-channel interpolation would recover most of the 23.6% EC loss without keeping artifact. Worth bundling into the same regeneration.
+
+- **Next:** (1) set topography thresholds from `ica_components_audit.csv` and add the veto to `remove_artifacts_ica`; (2) re-run `audit_ica_alpha.py` and confirm median retention moves toward 1.0; (3) consider per-channel interpolation in the same pass; (4) regenerate the cohort **once**, with both fixes; (5) then §6R, smoke run, Phase 2.
