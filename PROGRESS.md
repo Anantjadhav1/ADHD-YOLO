@@ -596,3 +596,56 @@ So `find_bads_eog` and `find_bads_muscle` are flagging components that are not f
 **Also still open:** the earlier finding that only **1.4 of 19 channels** drive epoch rejection. Whole-epoch rejection discards ~17 clean channels per rejected epoch, and per-channel interpolation would recover most of the 23.6% EC loss without keeping artifact. Worth bundling into the same regeneration.
 
 - **Next:** (1) set topography thresholds from `ica_components_audit.csv` and add the veto to `remove_artifacts_ica`; (2) re-run `audit_ica_alpha.py` and confirm median retention moves toward 1.0; (3) consider per-channel interpolation in the same pass; (4) regenerate the cohort **once**, with both fixes; (5) then §6R, smoke run, Phase 2.
+
+
+### 2026-08-25c — topography veto: alpha retention 0.643 -> 1.000. ICA question closed.
+
+The fix for the alpha loss, and it works. **A spectral detector needs a spatial sanity check** — the same shape as the physical plausibility check the EC/EO changepoint detector needed on top of its statistics. Same error, different domain.
+
+**Measured the full region breakdown first** (the previous entry's analysis used only occipital and frontal, which was a blind spot: muscle artifact is *temporal*, so every genuine muscle component looked diffuse by construction and a veto built on it would have rejected the muscle detector's whole output on a measurement artifact). With all six regions:
+
+```
+peak_region   central  frontal  frontopolar  occipital  parietal  temporal
+eog                17       13           77         20        17        12
+muscle             11       30           30         15        11        57
+```
+
+An `eog` component should peak frontopolar; **58% do** (including lateral frontal). A `muscle` component should peak temporal; **37% do**. Overall **48%**. Both detectors are wrong more often than right — they judge on spectral criteria with no spatial check, so a diffuse component whose frequency content happens to match gets removed, and removing a diffuse component subtracts signal from every channel proportionally.
+
+**The rule chosen: peak region must match the detection reason AND focality > 2.0.** Candidates measured on the real 313 components:
+
+| rule | kept/subject | est. retention |
+|---|---|---|
+| current (no veto) | 3.04 | 0.643 *(measured)* |
+| region must match reason | 1.46 | 0.840 |
+| focality > 1.5 | 1.67 | 0.866 |
+| focality > 2.0 | 1.08 | 0.934 |
+| region match AND focality > 1.5 | 0.96 | 0.934 |
+| **region match AND focality > 2.0** | **0.69** | **0.996** |
+
+**This was a judgment call, not a data-determined answer** — the last two candidates differ by 28 components and 0.06 of retention, and the data does not separate them. The reasoning for the stricter one: the two errors are asymmetric. Losing alpha is *demonstrated* (median 0.643, 34/108 below half) and damages the EC/EO split — which is *decided by* occipital alpha — plus every scalogram, topomap and coherence map. Surviving blinks inflate delta/theta, i.e. TBR's numerator, on a biomarker already measured at AUC 0.43/0.49/0.55; and 250 µV epoch rejection catches gross ocular artifact regardless.
+
+**Stated plainly, because it should not be buried:** at 0.69 components/subject, roughly a third of subjects get *zero* exclusions — ICA effectively off for them, with epoch rejection as the only artifact control. That is defensible only because the detectors are right 48% of the time, and five subjects had already run with zero exclusions retaining exactly 1.00x alpha, so the no-ICA path is not untested.
+
+**Validated on 20 subjects (10 ADHD / 10 Control):**
+
+| | before | after |
+|---|---|---|
+| median alpha retained | 0.643 | **1.000** |
+| range | 0.016 – 1.405 | 0.977 – 1.015 |
+| subjects losing >50% | 34/108 | **0/20** |
+| subjects losing >25% | 68/108 | **0/20** |
+| median occipital weight of removed components | 0.951 | **0.259** |
+| median frontal weight of removed components | 1.000 | **3.379** |
+| occipital-dominant components removed | 9 (2.9%) | **0 (0%)** |
+| corr(components removed, alpha retained) | −0.336 | **−0.059** |
+
+The kept components now sit close to the reference profile for a genuine ocular component (0.09 occipital / 4.05 frontal). 14 components across 20 subjects = 0.70/subject, matching the 0.69 prediction, with 7/20 subjects at zero exclusions.
+
+**One thing to confirm before regenerating.** The between-group difference p moved from 0.676 to **0.096** (ADHD median 1.0 components excluded, Control 0.5). At n=20 that is almost certainly noise, but *differential* exclusion between groups would be a confound — preprocessing would be treating the two classes differently. Confirm on the full cohort (1.5 h) before committing to a 5-hour regeneration built on it.
+
+**What this does NOT fix.** A 48% region-match rate means the detectors are barely better than chance at *locating* artifact. The veto salvages their output; it does not repair them. `mne-icalabel` classifies components from topography *and* spectrum together and remains the principled replacement — logged, not done.
+
+**Consequence unchanged: the 122k-image dataset must be regenerated.** Every image was produced from ICA-cleaned signal under the old behaviour. Bundle the regeneration with per-channel interpolation for epoch rejection (only 1.4 of 19 channels drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch) — one 5-hour run, not two.
+
+- **Next:** (1) full-cohort `audit_ica_alpha.py` to confirm retention and rule out differential exclusion; (2) per-channel interpolation; (3) regenerate the cohort **once**, re-tag `dataset-v2`; (4) §6R inner-validation fix; (5) smoke run; (6) Phase 2.

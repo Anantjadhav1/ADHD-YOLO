@@ -31,7 +31,7 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | ✅ **Cohort dataset built** — 108 subjects processed, 99 ok / 9 skipped ambiguous / 0 failed, ~122,000 images in ~5 hours. Artifact rejection, TBR band power, topomap grid layout, epoch capping, coherence windowing and scalogram normalization all fixed before the run. One open question gates training: see the ICA/alpha note below |
+| 1 — Data pipeline | 🟡 **Built, found compromised, cause fixed — regeneration pending.** 108 subjects, ~122,000 images. ICA was removing genuine occipital alpha (median retention 0.643); a topography veto restores it to **1.000**. The existing images still come from the old behaviour and must be regenerated |
 | 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built and the CNN↔fusion plumbing connects end to end (§6P, §6Q). Real images now exist to train on. Remaining: CV accuracy is still optimistically biased (§6R), the classical half is at chance, and no real training run has happened |
 | 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
 | 4 — Literature review + paper writing | ⬜ Not started |
@@ -43,7 +43,17 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 
 **Test split is 14 of 17 usable.** Fourteen subjects were skipped by the EC/EO ambiguity rule, four of them in the test split; five were recovered using validated changepoint boundaries (see below). At n=14 the 95% CI on accuracy is roughly ±24 points, which constrains what the final result can claim.
 
-> ⚠️ **One question gates training.** Occipital alpha contrast changes drastically across ICA for some subjects — C10050113 3.60 → 0.66, F09080101 1.44 → 0.15, but C12021125 6.22 → 170.74. Alpha blocking is among the most robust effects in electrophysiology; if it vanishes after ICA, ICA removed it. That would affect the EC/EO split, every generated image, and TBR. Unresolved, and the next investigation.
+> 🟡 **ICA was removing occipital alpha. Fixed — but the existing images predate the fix.**
+>
+> An audit of all 108 subjects found ICA removing genuine occipital alpha: **median retention 0.643**, 68/108 subjects losing >25%, 34/108 losing >50% (worst 0.02×). Alpha blocking is among the most robust effects in electrophysiology, so losing a third of it is preprocessing damage, not variation.
+>
+> The mechanism was **not** occipital-dominant components — only 9 of 313 (2.9%) were. It was that `find_bads_eog` and `find_bads_muscle` judge components on *spectral* criteria alone, so spatially diffuse components got removed, and removing a diffuse component subtracts signal from every channel proportionally. Measured by peak region, an `eog` component peaks frontopolar only 58% of the time and a `muscle` component peaks temporal only 37% — **48% overall.** Both detectors are wrong more often than right.
+>
+> **The fix is a topography veto** — a spatial sanity check on a spectral detector, the same shape as the physical plausibility check the EC/EO changepoint detector needed. A component is excluded only if it peaks in the region its detection reason implies *and* is focal there (focality > 2.0). Validated on 20 subjects: median alpha retention **0.643 → 1.000**, range 0.977–1.015, and the components still removed now match the reference profile for genuine ocular artifact (occipital 0.259, frontal 3.379 against a reference 0.09 / 4.05).
+>
+> **The ~122k existing images still come from the old behaviour and must be regenerated**, bundled with per-channel epoch interpolation. One 5-hour run.
+>
+> The loss was **not differential between groups** (ADHD 0.629, Control 0.651, p = 0.68), so preprocessing was not manufacturing a between-group difference. Worth re-confirming post-veto on the full cohort before regenerating.
 
 ### What's built
 
@@ -111,6 +121,10 @@ Resolving the EC/EO question took four attempts, and the sequence is worth recor
 
 **The finding that mattered most: a statistical test needs a physical sanity check on top of it.** Four subjects passed *every* statistical test — permutation p = 0.005, split-half difference 0.000 — with boundaries putting one condition at 47–70 seconds of an 8-minute recording. Adding a plausibility range of 0.25–0.75 as an AND (not a tiebreaker) rejected **19 subjects that passed both statistical tests**.
 
+The same shape recurred immediately afterwards in the ICA audit: a *spectral* detector (`find_bads_eog`, `find_bads_muscle`) needs a *spatial* sanity check on top of it. Both detectors flag components on frequency-domain criteria alone, and components with no focal topography — not eye movement, not muscle — satisfy those criteria and get removed. It is the same error in a different domain.
+
+Related: of four thresholds set in this project, the two taken from convention (150 µV peak-to-peak, MNE's muscle threshold of 0.5) were both wrong, and the two set from measured distributions were both right. **Copy conventions for physics; measure anything data-dependent.**
+
 ---
 
 ## Findings on the classical biomarker (2026-08-23)
@@ -163,9 +177,10 @@ This is an independent replication, on this dataset, of the 2020 five-algorithm 
 
 ## What's next
 
-1. **Resolve the ICA/alpha question** — this gates training. Occipital alpha contrast changes drastically across ICA for some subjects (C10050113 0.18×, F09080101 0.10×, C12021125 27×). Audit alpha power pre/post ICA per subject, and compute the occipital weight of every excluded component: a genuine ocular component is frontal-dominant with near-zero O1/O2 loading. If ICA is removing brain signal, every image in the dataset is affected.
-2. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against the real generated images.
-3. **Compute TBR on the continuous segment** rather than 1.5 s epochs, which cap frequency resolution at 0.67 Hz.
+1. **Confirm the veto on the full cohort** — 20-subject validation gives median retention 1.000, but the between-group difference p moved from 0.676 to 0.096 at that sample size. Almost certainly noise, but *differential* exclusion between groups would be a confound. 1.5 hours, cheap next to a 5-hour regeneration built on it.
+2. **Regenerate the cohort once, with both pipeline fixes** — the topography veto, and per-channel interpolation for epoch rejection (only 1.4 of 19 channels drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch). ~5 hours; do them together.
+3. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against the regenerated images.
+4. **Compute TBR on the continuous segment** rather than 1.5 s epochs, which cap frequency resolution at 0.67 Hz.
 4. **Expand the classical feature set** — relative band power per channel per condition, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries. Now critical path.
 5. **Close the last Phase 2 gap** — add an inner validation split to the CV loop (§6R) so epoch selection stops leaking. Out-of-fold probabilities (§6P) and held-out test evaluation (§6Q) are both done.
 6. **Phase 2 — the critical checkpoint:** real subject-wise 5-fold CV for all three approaches, with significance tests against 75.8% and 84.5%.
@@ -252,5 +267,7 @@ $env:ADHD_YOLO_DATA_ROOT = "D:\ADHD-Faezeh Rohani-edf"
 - P300 latency/amplitude and per-condition behavioral features are unavailable pending clarification from the dataset source.
 - **The per-frequency-row normalization applied to scalograms removes absolute band-power relationships**, which means the theta/beta ratio is not recoverable from the scalogram images by design. This was a fix for a visual problem that has a signal-content cost, and needs revisiting.
 - Grad-CAM and the clinical-plausibility check have not been run against a real trained model.
+- **The current 122k-image dataset must not be trained on.** It was generated before the topography veto, when ICA was removing a median 36% of occipital alpha. The cause is fixed; the images are not. Regeneration is required.
+- **The ICA component detectors are unreliable and the veto is a guard, not a repair.** `find_bads_eog` and `find_bads_muscle` place artifact correctly only 48% of the time. The veto discards their bad output, but roughly a third of subjects consequently receive zero component exclusions — ICA effectively off, with epoch rejection as the only artifact control. `mne-icalabel`, which classifies from topography and spectrum together, is the principled replacement and has not been evaluated.
 - No Phase 2 result exists yet. All accuracy figures in this repo are from toy smoke tests and are not results.
 - This is a research/decision-support tool. It does not diagnose ADHD and is not a replacement for clinical evaluation.
