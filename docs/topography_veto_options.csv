@@ -1,0 +1,8 @@
+rule,kept,vetoed,pct_vetoed
+current (no veto),313,0,0.0
+veto occipital > 1.5,304,9,0.02875399361022364
+eog must be frontal > 2.0,210,103,0.329073482428115
+eog frontal > 2.0 AND veto occipital > 1.5,203,110,0.3514376996805112
+require focality (max region weight > 1.5),100,213,0.6805111821086262
+focality > 1.5 AND veto occipital > 1.5,91,222,0.7092651757188498
+focality > 2.0 AND veto occipital > 1.5,78,235,0.7507987220447284

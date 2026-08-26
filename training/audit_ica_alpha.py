@@ -71,6 +71,21 @@ from data_pipeline.preprocessing import (ALPHA_BAND_HZ, CHANNELS_19,
                                          load_raw, remove_artifacts_ica)
 
 OCCIPITAL = ["O1", "O2"]
+
+# Focality has to be judged over regions where artifact ACTUALLY LIVES, not
+# just the two the alpha question needed. Measuring only occipital and frontal
+# made every temporal muscle component look diffuse -- the synthetic reference
+# scores genuine temporal muscle at 0.22 on that pair -- so a focality veto
+# built on it would have rejected the muscle detector's entire output on a
+# measurement artifact rather than on evidence.
+REGIONS = {
+    "frontopolar": ["Fp1", "Fp2"],          # blinks, vertical eye movement
+    "frontal":     ["F7", "F3", "Fz", "F4", "F8"],
+    "temporal":    ["T3", "T4", "T5", "T6"],  # muscle (EMG) lives here
+    "central":     ["C3", "Cz", "C4"],
+    "parietal":    ["P3", "Pz", "P4"],
+    "occipital":   ["O1", "O2"],            # alpha
+}
 TRIM_SEC = 15.0
 # Below this fraction of alpha retained, ICA has taken more than it should.
 ALPHA_LOSS_FLAG = 0.5
@@ -138,12 +153,21 @@ def analyse(eoec_path: str) -> dict:
     comps = []
     for i in diag["excluded"]:
         topo = mixing[:, i]
-        comps.append({
+        rec = {
             "component": int(i),
             "reason": diag["reasons"].get(int(i), "?"),
             "occipital_weight": region_weight(topo, fitted_ch, OCCIPITAL),
             "frontal_weight": region_weight(topo, fitted_ch, EOG_PROXY_CHANNELS),
-        })
+        }
+        for name, chans in REGIONS.items():
+            rec[f"w_{name}"] = region_weight(topo, fitted_ch, chans)
+        # Focality over ALL regions: how much the strongest region stands out.
+        # A genuine artifact dominates SOME region; a diffuse component
+        # dominates none. This is the number the veto should use.
+        rvals = [rec[f"w_{n}"] for n in REGIONS if np.isfinite(rec[f"w_{n}"])]
+        rec["focality"] = max(rvals) if rvals else float("nan")
+        rec["peak_region"] = max(REGIONS, key=lambda n: rec[f"w_{n}"]) if rvals else "?"
+        comps.append(rec)
 
     worst_occ = max((c["occipital_weight"] for c in comps
                      if np.isfinite(c["occipital_weight"])), default=float("nan"))

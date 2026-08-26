@@ -109,6 +109,102 @@ MUSCLE_THRESHOLD = 0.9
 # (unambiguous, consistently 2 across every subject and threshold tested);
 # muscle is capped by score, strongest kept.
 MAX_ICA_COMPONENTS_EXCLUDED = 5
+
+# --- Topography veto -------------------------------------------------------
+#
+# find_bads_eog and find_bads_muscle judge components on SPECTRAL criteria
+# alone. A spatially diffuse component whose frequency content happens to match
+# gets removed -- and removing a diffuse component subtracts signal from every
+# channel proportionally, occipital alpha included. Measured on all 108
+# subjects (training/audit_ica_alpha.py): median occipital alpha retained
+# across ICA was 0.643, with 34/108 subjects losing more than half.
+#
+# Measured on the 313 components that were being removed, by peak region:
+#
+#     peak_region   central  frontal  frontopolar  occipital  parietal  temporal
+#     eog                17       13           77         20        17        12
+#     muscle             11       30           30         15        11        57
+#
+# An eog component should peak frontopolar; 58% do (incl. lateral frontal).
+# A muscle component should peak temporal; 37% do. Overall 48%. Both
+# detectors are wrong more often than right.
+#
+# So: a spectral detector needs a spatial sanity check, exactly as the EC/EO
+# changepoint detector needed a physical plausibility check on top of its
+# statistics. Same error, different domain.
+REGIONS = {
+    "frontopolar": ["Fp1", "Fp2"],            # blinks, vertical eye movement
+    "frontal":     ["F7", "F3", "Fz", "F4", "F8"],
+    "temporal":    ["T3", "T4", "T5", "T6"],  # EMG lives here
+    "central":     ["C3", "Cz", "C4"],
+    "parietal":    ["P3", "Pz", "P4"],
+    "occipital":   ["O1", "O2"],              # alpha
+}
+EXPECTED_PEAK_REGION = {
+    "eog": {"frontopolar", "frontal"},
+    "muscle": {"temporal"},
+}
+# How far the strongest region must stand above the scalp mean. 1.0 is
+# perfectly uniform. Reference topographies score 4.05 (genuine ocular) and
+# ~2.5+ (temporal muscle); the median component actually being removed scored
+# 1.18 for eog.
+#
+# 2.0 rather than 1.5 deliberately. The two rules keep 0.69 vs 0.96 components
+# per subject with estimated retention 0.996 vs 0.934. The errors are not
+# symmetric: losing alpha is DEMONSTRATED and damages the EC/EO split plus
+# every generated image, while surviving blinks inflate TBR's numerator on a
+# biomarker already measured at AUC ~0.5 -- and 250 uV epoch rejection catches
+# gross ocular artifact regardless. At 0.69/subject roughly a third of subjects
+# get zero exclusions, which is ICA effectively off for them; that is only
+# acceptable because the detectors are right 48% of the time.
+MIN_COMPONENT_FOCALITY = 2.0
+
+
+def _region_weight(topo: np.ndarray, ch_names: list, region: list) -> float:
+    """Mean |weight| over a region, divided by the mean over all channels.
+
+    Scale-free because ICA component sign and magnitude are arbitrary -- only
+    the SHAPE of a topography carries meaning. 1.0 means the region is exactly
+    average; above 1.0 means it dominates.
+    """
+    a = np.abs(topo)
+    m = a.mean()
+    if m <= 0:
+        return float("nan")
+    idx = [ch_names.index(c) for c in region if c in ch_names]
+    return float(a[idx].mean() / m) if idx else float("nan")
+
+
+def _topography_veto(ica, fitted_ch: list, exclude: set, reasons: dict) -> tuple:
+    """Drop components whose scalp topography contradicts their detection reason.
+
+    Returns (kept, vetoed_detail). A component survives only if it peaks in a
+    region consistent with why it was flagged AND is focal enough there.
+    """
+    mixing = ica.get_components()
+    kept, vetoed = set(), {}
+    for i in sorted(exclude):
+        topo = mixing[:, i]
+        weights = {n: _region_weight(topo, fitted_ch, ch) for n, ch in REGIONS.items()}
+        finite = {n: w for n, w in weights.items() if np.isfinite(w)}
+        if not finite:
+            vetoed[i] = "no valid topography"
+            continue
+        peak = max(finite, key=finite.get)
+        focality = finite[peak]
+
+        reason = "+".join(reasons.get(i, ["?"]))
+        expected = set()
+        for r in reason.split("+"):
+            expected |= EXPECTED_PEAK_REGION.get(r, set())
+
+        if expected and peak not in expected:
+            vetoed[i] = f"{reason} but peaks {peak} (expected {'/'.join(sorted(expected))})"
+        elif focality < MIN_COMPONENT_FOCALITY:
+            vetoed[i] = f"{reason} peaks {peak} but focality {focality:.2f} < {MIN_COMPONENT_FOCALITY}"
+        else:
+            kept.add(i)
+    return kept, vetoed
 FLAT_THRESHOLD_V = 1e-7  # catches dead/disconnected channel segments
 HIGH_REJECTION_RATE_WARN = 0.30
 ALPHA_AMBIGUOUS_RATIO_RANGE = (0.7, 1.4)  # ratio inside this range -> flag for manual QC
@@ -264,6 +360,17 @@ def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
     except Exception as e:  # noqa: BLE001
         warnings.warn(f"Muscle component detection failed: {e}")
 
+    # Spatial sanity check on a spectral detector -- see _topography_veto.
+    fitted_ch = [c for c in CHANNELS_19 if c in raw.ch_names]
+    detected = dict(reasons)
+    exclude, vetoed = _topography_veto(ica, fitted_ch, exclude, reasons)
+    reasons = {i: r for i, r in reasons.items() if i in exclude}
+    if vetoed:
+        warnings.warn(
+            f"Topography veto blocked {len(vetoed)} of {len(detected)} detected "
+            f"components: {'; '.join(f'{i}: {r}' for i, r in sorted(vetoed.items()))}"
+        )
+
     ica.exclude = sorted(exclude)
     raw_clean = ica.apply(raw.copy(), verbose=False)
 
@@ -278,6 +385,10 @@ def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
         # True when the cap fired -- carry this into the audit log so
         # over-contaminated subjects can be reviewed before Phase 2.
         "capped": len(ica.exclude) >= MAX_ICA_COMPONENTS_EXCLUDED,
+        "n_detected": len(detected),
+        "n_vetoed": len(vetoed),
+        "vetoed": {int(i): r for i, r in sorted(vetoed.items())},
+        "focality_threshold": MIN_COMPONENT_FOCALITY,
     }
     if return_ica:
         # For diagnostics that need the component TOPOGRAPHIES, not just which
