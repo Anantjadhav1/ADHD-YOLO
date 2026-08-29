@@ -125,14 +125,29 @@ def subject_id_from_filename(fname: str) -> str:
 
 
 def build_fold_dataset(images_root: str, representation: str, val_fold: str,
-                        all_dev_folds: list, workdir: str) -> str:
+                       all_dev_folds: list, workdir: str,
+                       exclude_fold: str | None = None) -> str:
     """
     Assemble a temp directory in the layout Ultralytics classification
     training expects (train/<class>/*.png, val/<class>/*.png), using
     symlinks -- not copies -- so this is fast and never duplicates the
     actual image data on disk.
 
-    val_fold: the one fold held out as validation this round, e.g. "fold_2".
+    val_fold: the fold placed in val/. What that MEANS depends on exclude_fold:
+
+        exclude_fold=None  -- the old two-way split. val_fold goes to val/,
+            every other dev fold to train/. Ultralytics then selects best.pt
+            using val/, and if the caller also SCORES on val/ the result is
+            best-epoch-chosen-on-X measured-on-X. Kept only for callers that
+            do not evaluate on val.
+
+        exclude_fold=<fold>  -- the three-way split section 6R requires. The
+            excluded fold appears in NEITHER train/ nor val/; val_fold is an
+            INNER validation fold that exists purely for Ultralytics' epoch
+            selection; everything else trains. The excluded fold is then
+            scored separately with predict_class_dirs, so nothing that
+            influenced checkpoint selection is part of the reported number.
+
     all_dev_folds: every fold name EXCEPT the held-out TEST set (that's the
         whole point of subject_split.py's two-stage design -- test is never
         touched here, only used once in Phase 2's final evaluation).
@@ -145,7 +160,14 @@ def build_fold_dataset(images_root: str, representation: str, val_fold: str,
         (ds_root / "train" / cls).mkdir(parents=True, exist_ok=True)
         (ds_root / "val" / cls).mkdir(parents=True, exist_ok=True)
 
-    train_folds = [f for f in all_dev_folds if f != val_fold]
+    if exclude_fold is not None and exclude_fold == val_fold:
+        raise ValueError(
+            f"exclude_fold and val_fold are both {val_fold!r}. The outer fold must "
+            "be scored on data that played no part in checkpoint selection; using "
+            "the same fold for both is the bias this argument exists to remove."
+        )
+
+    train_folds = [f for f in all_dev_folds if f not in (val_fold, exclude_fold)]
 
     for split_name, dest_split in [(val_fold, "val")] + [(f, "train") for f in train_folds]:
         for cls in CLASSES:
@@ -168,12 +190,21 @@ def build_fold_dataset(images_root: str, representation: str, val_fold: str,
     return str(ds_root)
 
 
-def verify_fold_dataset(ds_root: str, val_fold: str, images_root: str, representation: str) -> None:
+def verify_fold_dataset(ds_root: str, val_fold: str, images_root: str,
+                        representation: str, exclude_fold: str | None = None,
+                        manifest: pd.DataFrame | None = None) -> None:
     """Assert the assembled fold has no leakage: every subject_id present in
     val/ must be absent from train/, and nothing from the held-out TEST split
     should be present anywhere. Run this before every training call, not just
     when the code was written -- a future edit to build_fold_dataset() could
-    silently reintroduce leakage otherwise."""
+    silently reintroduce leakage otherwise.
+
+    exclude_fold: when the three-way section 6R split is in use, the outer fold
+        must appear in NEITHER train/ nor val/. This is the assertion that
+        catches a wiring mistake in that split -- without it, an outer fold
+        accidentally left in train/ would produce a number that looks fine and
+        is badly optimistic. Requires `manifest` to know which subjects belong
+        to it."""
     def subjects_in(split_dir):
         ids = set()
         for cls in CLASSES:
@@ -186,6 +217,17 @@ def verify_fold_dataset(ds_root: str, val_fold: str, images_root: str, represent
     val_subjects = subjects_in("val")
     overlap = train_subjects & val_subjects
     assert not overlap, f"LEAKAGE: subject(s) {overlap} appear in both train and val for fold {val_fold}"
+
+    if exclude_fold is not None:
+        if manifest is None:
+            raise ValueError("verify_fold_dataset needs `manifest` to check exclude_fold.")
+        outer = set(manifest.loc[manifest["split"] == exclude_fold, "subject_id"])
+        present = outer & (train_subjects | val_subjects)
+        assert not present, (
+            f"LEAKAGE: outer fold {exclude_fold} subject(s) {sorted(present)} appear in "
+            "train/ or val/. The outer fold must influence neither the weights nor the "
+            "checkpoint choice, or its score is not an out-of-sample estimate."
+        )
 
     test_dir = Path(images_root) / representation / "test"
     if test_dir.exists():
@@ -426,10 +468,33 @@ def evaluate_on_test(manifest_path: str, images_root: str, representation: str,
 
 def run_cv(manifest_path: str, images_root: str, representation: str,
            output_dir: str, epochs: int = 30, imgsz: int = 224) -> tuple:
-    """Full subject-wise CV loop: for each dev fold, assemble the dataset,
-    verify no leakage, train, evaluate at the subject level. TEST split is
-    never touched here -- see PROJECT.md sec 6, final test evaluation is a
-    separate one-shot step after model selection is done via these folds.
+    """Full subject-wise CV loop with a THREE-WAY split per outer fold.
+
+    Section 6R. This used to be a two-way split: the outer fold went into
+    val/, Ultralytics selected best.pt by accuracy on val/, and
+    predict_val_fold then scored that same val/. Best-epoch-chosen-on-X,
+    measured-on-X -- and the bias grows with the number of epochs trained, so
+    a 30-epoch run is worse than the 3-epoch smoke run that first exposed it.
+
+    Now, for outer fold k:
+        outer fold k  -> excluded from the assembled dataset entirely, scored
+                         afterwards straight from images_root
+        inner fold    -> val/, used ONLY for Ultralytics' epoch selection
+        remaining     -> train/
+
+    The inner fold rotates (dev_folds[(i+1) % n]) so no single fold is
+    permanently the one sacrificed -- a fixed inner fold would never appear in
+    train/ for any outer fold, quietly shrinking the effective training set.
+
+    THE COST, stated rather than hidden: training data per outer fold drops
+    from 4/5 to 3/5 of the development set, roughly 62 subjects instead of 83.
+    That is a real reduction and it will probably lower the reported accuracy.
+    It is worth paying: a biased number is not a smaller version of the right
+    answer, it is the wrong answer.
+
+    TEST split is never touched here -- see PROJECT.md sec 6, final test
+    evaluation is a separate one-shot step after model selection is done via
+    these folds.
 
     Returns (fold_metrics_df, oof_df). The second element is the per-subject
     out-of-fold probability table the fusion meta-classifier consumes -- see
@@ -441,13 +506,24 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
     subject_split.verify_no_leakage(manifest)
 
     dev_folds = sorted(f for f in manifest["split"].unique() if f != "test")
+    if len(dev_folds) < 3:
+        raise ValueError(
+            f"The three-way split needs at least 3 development folds; got {dev_folds}. "
+            "With 2 there is nothing left to train on once one fold is excluded and "
+            "another is spent on checkpoint selection."
+        )
     fold_metrics = []
     oof_frames = []
 
     with tempfile.TemporaryDirectory() as workdir:
-        for val_fold in dev_folds:
-            ds_root = build_fold_dataset(images_root, representation, val_fold, dev_folds, workdir)
-            verify_fold_dataset(ds_root, val_fold, images_root, representation)
+        for i, outer_fold in enumerate(dev_folds):
+            # Rotate the inner fold so no single fold is permanently the one
+            # sacrificed to checkpoint selection.
+            inner_fold = dev_folds[(i + 1) % len(dev_folds)]
+            ds_root = build_fold_dataset(images_root, representation, inner_fold,
+                                         dev_folds, workdir, exclude_fold=outer_fold)
+            verify_fold_dataset(ds_root, inner_fold, images_root, representation,
+                                exclude_fold=outer_fold, manifest=manifest)
 
             model = YOLO("yolov8n-cls.pt")  # ImageNet-pretrained -- see PROJECT.md sec 5a #2, non-negotiable given N=103
             # Resolve to an absolute path: Ultralytics treats a relative `project`
@@ -455,22 +531,36 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
             # passing it relative silently nests output under runs/classify/<project>/
             # instead of exactly where you asked. Absolute path avoids that.
             abs_output_dir = str(Path(output_dir).resolve())
-            run_name = f"{representation}_{val_fold}"
+            run_name = f"{representation}_{outer_fold}"
             model.train(data=ds_root, epochs=epochs, imgsz=imgsz,
                         project=abs_output_dir, name=run_name, exist_ok=True,
                         **DISABLE_AUGMENTATION, **REPRODUCIBILITY)
             verify_augmentation_disabled(Path(abs_output_dir) / run_name)
 
-            per_image = predict_val_fold(model, ds_root)
+            # Score the OUTER fold, read straight from images_root. NOT
+            # predict_val_fold -- that reads the assembled val/, which holds the
+            # INNER fold Ultralytics just used to pick best.pt. Scoring it would
+            # be the exact bias this restructure removes.
+            per_image = predict_class_dirs(
+                model, Path(images_root) / representation / outer_fold)
+            if not per_image:
+                raise FileNotFoundError(
+                    f"No images for outer fold {outer_fold} under "
+                    f"{Path(images_root) / representation / outer_fold}. The fold "
+                    "cannot be scored, and silently skipping it would drop subjects "
+                    "from the OOF table without saying so."
+                )
             subj_df = aggregate_to_subject_level(per_image)
             # Keep this fold's subject-level predictions -- these ARE the
             # out-of-fold probabilities the fusion classifier needs. They used
             # to be computed here, used once for metrics, and dropped.
-            oof_frames.append(subj_df.assign(fold=val_fold))
+            oof_frames.append(subj_df.assign(fold=outer_fold))
             metrics = compute_metrics(subj_df)
-            metrics["fold"] = val_fold
+            metrics["fold"] = outer_fold
+            metrics["inner_val_fold"] = inner_fold
+            metrics["n_train_folds"] = len(dev_folds) - 2
             fold_metrics.append(metrics)
-            print(f"[{val_fold}] n_subjects={metrics['n_subjects']} "
+            print(f"[{outer_fold}] inner_val={inner_fold} n_subjects={metrics['n_subjects']} "
                   f"acc={metrics['accuracy']:.3f} sens={metrics['sensitivity']:.3f} "
                   f"spec={metrics['specificity']:.3f} auc={metrics['auc']:.3f}")
 

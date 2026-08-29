@@ -38,3 +38,6 @@ runs/**/train_batch*.jpg
 runs/**/val_batch*.jpg
 runs/**/*.png
 *.log
+
+*.zip
+runs/sixr_check/
