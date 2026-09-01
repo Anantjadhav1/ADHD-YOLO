@@ -18,7 +18,12 @@ jobs:
           python-version: "3.13"
 
       - name: Install test dependencies
-        run: pip install --quiet pytest mne numpy pandas scipy
+        # scikit-learn is needed at IMPORT time, not just at call time:
+        # data_pipeline/subject_split.py imports StratifiedKFold at module
+        # level, so pytest fails during collection without it. Deliberately
+        # not installing torch/ultralytics -- they are ~2 GB and no test
+        # imports train_yolo_cls.
+        run: pip install --quiet pytest mne numpy pandas scipy scikit-learn
 
       - name: Run tests
         # `python -m pytest`, not bare `pytest`: the -m form puts the current
