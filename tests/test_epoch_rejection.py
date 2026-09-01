@@ -74,6 +74,14 @@ def test_real_artifact_is_still_rejected():
     The fix must not amount to switching rejection off. A channel driven far
     past the threshold still has to be caught.
     """
+    # NOTE: MNE emits RuntimeWarning("All epochs were dropped!") when this
+    # passes, so do NOT run the suite with -W error -- it turns a correct
+    # result into a failure.
+    #
+    # The stronger assertion is that CLEAN epochs survive alongside the dirty
+    # ones. Rejecting everything also satisfies "artifact was rejected", and
+    # that is not hypothetical: on 2026-08-25 the LABEL channel caused exactly
+    # that on every subject in the cohort, and it looked like working rejection.
     raw = _synthetic_raw()
     data = raw.get_data()
     data[0, :] *= 100  # ~12,000 uV peak-to-peak on one channel
