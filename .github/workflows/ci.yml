@@ -11,7 +11,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build backend image
         run: docker build -f backend/Dockerfile -t adhd-yolo-backend .
-      # TODO once tests exist: add a test step here (pytest for data_pipeline,
-      # basic endpoint tests for backend). Don't add empty test stubs just to
-      # have a green checkmark — a build-only CI is honest; a fake-passing
-      # test suite is worse than no CI.
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install test dependencies
+        run: pip install --quiet pytest mne numpy pandas scipy
+
+      - name: Run tests
+        run: pytest tests/ -q
+        # 13 tests across two files. The TODO this replaces said not to add
+        # empty stubs just for a green checkmark -- that was correct then and
+        # is stale now. These tests exist because the bugs they cover were
+        # real: test_epoch_rejection came from the LABEL channel rejecting
+        # 100% of epochs on every subject, and test_manifest_paths from the
+        # relative-path handling that made the manifest portable.
