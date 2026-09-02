@@ -41,3 +41,5 @@ runs/**/*.png
 
 *.zip
 runs/sixr_check/
+
+dataset_v2_small/

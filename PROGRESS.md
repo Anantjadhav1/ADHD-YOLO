@@ -650,11 +650,67 @@ The kept components now sit close to the reference profile for a genuine ocular 
 
 - **Next:** (1) full-cohort `audit_ica_alpha.py` to confirm retention and rule out differential exclusion; (2) per-channel interpolation; (3) regenerate the cohort **once**, re-tag `dataset-v2`; (4) §6R inner-validation fix; (5) smoke run; (6) Phase 2.
 
-### 2026-08-2x (undated in the repo — reconstructed from `audit_veto.log`, `build_v2.log`, `audit_rejection_postveto.log`, `runs/smoke/`)
-- Ran `audit_ica_alpha.py` on the **full 108-subject cohort**, not just the n=20 validation set. Result matches the n=20 finding and closes the question: 71 components excluded, median occipital weight 0.237 vs. frontal 3.412 (0/71 occipital-dominant), corr(components removed, alpha retained) = +0.12. The n=20 between-group wobble (p = 0.096) was noise — full-cohort p = 0.86, no differential loss. Logged verdict: "Alpha is preserved... proceed to training."
-- Regenerated the dataset as `dataset_v2` (`build_v2.log`): 98/108 subjects imaged, 10 skipped as EC/EO-ambiguous, EC/EO/VCPT epoch counts logged (EC=16080, EO=16847, VCPT=26926). **This regeneration used the topography veto only — per-channel interpolation for epoch rejection was not bundled in**, despite the plan in the previous entry to do both together.
-- Ran a follow-up rejection audit post-veto (`audit_rejection_postveto.log`) and found a second, independent artifact-handling problem: the 250 µV epoch-rejection threshold removes EC epochs systematically more than EO (mean 32.0% vs 20.5%, EC > EO in 87/108 subjects). This both throws away more of the condition the biomarkers lean on and quietly damages the alpha-blocking contrast the EC/EO splitter is built on. Rejection is driven by a small, localized set of channels (Fp1, Fp2, F7, F8, O1, O2; mean 3.1/19 channels over threshold per subject) — exactly the profile per-channel interpolation is meant to fix. Threshold sweep confirms 250 µV is still the right global cutoff (keep-rate 74.9%, 101 condition-runs still below 70% keep); the fix is per-channel, not a different global number.
-- Ran the first real (short, capped) CV training against `dataset_v2` — scalogram representation, subject-wise 5-fold, 3 epochs/fold, `yolov8n-cls`, CPU. Result: **63.0% ± 11.6% accuracy, 45.6% sensitivity, 80.7% specificity, AUC 0.669** (`runs/smoke/scalogram_cv_results.csv`). Below both the 75.8% and 84.5% baselines, as expected from a 3-epoch run — this is proof that CNN → OOF-probability → fusion plumbing runs end-to-end against real regenerated images, not a Phase 2 result. Sensitivity well below specificity suggests the capped run is biased toward predicting Control.
-- Collected out-of-fold CNN probabilities for 84 subjects into `scalogram_oof_cnn_probs.csv` for `fusion_classifier.run_fusion_cv()`. Training itself warned that 7 development subjects have no CNN prediction and will be silently absent from the fusion table — overlaps only partially with the 10 subjects `build_v2.py` skipped as EC/EO-ambiguous; the two lists have not yet been reconciled against each other.
-- **What this does NOT do:** it does not close §6R (CV still selects `best.pt` on the same fold it scores), does not run the topomap or coherence representations, does not touch classical features (still built from the pre-veto dataset), and does not add per-channel interpolation. Treat the 63.0% figure as "the wiring works," not as a result to cite.
-- **Next:** (1) implement per-channel interpolation and rebuild once more (`dataset_v3`, or re-tag `dataset_v2` in place once it includes both fixes) before trusting any accuracy number; (2) reconcile the two "missing subject" lists (EC/EO-ambiguous vs. no-CNN-prediction); (3) rebuild classical features against the vetoed dataset; (4) §6R inner-validation fix; (5) full-length CV run (real epoch budget, all three representations) once the dataset is actually final; (6) Phase 2 checkpoint.
+### 2026-09-02 — first unbiased CNN result: AUC 0.503. The scalogram arm is at chance.
+
+The 30-epoch, 5-fold run completed on a Colab T4 in ~3.5 hours (0.70 h/fold). This is the first modelling number in the project that is not biased, not under-trained, and not a smoke test.
+
+| | |
+|---|---|
+| accuracy | **0.487 ± 0.155**  (95% CI 0.380 – 0.594) |
+| sensitivity | 0.422 ± 0.298 |
+| specificity | 0.545 ± 0.153 |
+| **auc** | **0.503 ± 0.180** |
+
+Baselines: 0.758 (Rohani SVM), 0.845 (FS + LR). **AUC 0.503 is exactly chance.**
+
+**The apparent signal in the smoke run was the selection bias.**
+
+| | smoke (biased, 3 ep) | real (unbiased, 30 ep) |
+|---|---|---|
+| accuracy | 0.630 | 0.487 |
+| auc | 0.669 | 0.503 |
+
+Section 6R was worth 0.669 → 0.503. Had that fix not landed first, the reported headline would have been a 0.669 AUC that did not exist. This is the single strongest argument for having done the methodological work before the modelling work, and it belongs in the discussion.
+
+**The training curve explains what happened:**
+
+| epoch | train loss | val top1 |
+|---|---|---|
+| 1 | 0.6790 | **0.630** |
+| 8 | 0.1750 | 0.535 |
+| 29 | 0.0010 | 0.530 |
+| 30 | 0.0004 | 0.533 |
+
+Training loss reaches **0.0004** — the model has memorised all 14,470 training images. Validation accuracy never beats epoch 1 and sits flat around 0.53 for the remaining 29.
+
+With 1.44M parameters and roughly 50 training subjects per fold, the network can learn *which subject* an image came from. Subject identity does not transfer to unseen subjects, and subject-wise CV correctly refuses to reward it. **That is `subject_split.py` doing exactly what it was built for.** An epoch-level split would have reported a spectacular number here.
+
+`fold_4` scored acc 0.235, sens 0.000, AUC 0.222 — *worse* than chance on 17 subjects. Combined with sensitivity varying ±0.298 across folds, most of the fold-to-fold spread is which subjects landed where rather than model skill. That is the n=84 / ~17-per-fold constraint made visible.
+
+**What this does and does not establish.**
+
+It establishes that **`yolov8n-cls` on 224×224 scalograms, fine-tuned end-to-end for 30 epochs, does not learn generalisable ADHD/Control discrimination on this cohort.** That is a real, honestly-measured result.
+
+It does not establish that the representation carries no signal. Untested: the topomap arm; the coherence maps as tabular features; a frozen backbone or linear probe (1.44M trainable parameters against ~50 subjects is almost certainly too much capacity); early stopping (the loss curve says the useful epoch was the *first* one); the expanded classical feature set; and the fusion classifier, which has still never run on real out-of-fold probabilities.
+
+**Where the project now stands on signal.** Two arms measured, both at chance:
+
+| feature | AUC |
+|---|---|
+| TBR — EC / EO / VCPT | 0.43 / 0.49 / 0.55 |
+| CNN on scalograms | 0.503 |
+
+Neither is a failure of execution. TBR at chance replicates a well-established literature. The CNN result is a clean measurement of a specific architecture on a specific representation at a specific sample size.
+
+**Immediate priorities for the next session, in order of expected value:**
+
+1. **Reduce capacity, not epochs.** A frozen backbone with a trained linear head, or freezing all but the last block. 1.44M parameters is the problem; 30 epochs merely reveals it. The memorisation curve is unambiguous.
+2. **Early stopping** — `patience=5` on the inner fold. Epoch 1 was the best epoch in every fold observed; 29 of 30 epochs were wasted compute and actively harmful to the checkpoint if `best.pt` selection ever drifted.
+3. **The topomap arm**, untested and structurally different — spatial rather than time-frequency.
+4. **The classical baseline and the paired comparison** — still unwritten, still the only way to make a statistically valid comparison against 75.8%. With CNN AUC at 0.503 this matters more, not less: a paired test can show the two methods are *equivalently* poor, which is itself reportable.
+
+**Housekeeping:** an unrelated Ultralytics run against its default `imagenet10` dataset (12 images, 10 classes) appeared in the Colab session — a stray `yolo train` with no arguments. Ignore it; it is not part of any result.
+
+**Operational note:** the Colab session dropped once mid-run (during fold 3) and had to be restarted from the beginning, because nothing was checkpointed to Drive between folds. Copying `runs/real` to Drive after each fold rather than at the end would make a dropped session cost one fold instead of all five.
+
+- **Next:** (1) frozen-backbone / linear-probe run; (2) early stopping; (3) topomap arm; (4) classical baseline + paired comparison; (5) fusion on real OOF probabilities.

@@ -31,8 +31,8 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | Phase | Status |
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | 🟡 **Regenerated as `dataset_v2` with the topography veto; per-channel interpolation was not bundled in.** The full-cohort audit (108 subjects) confirms the veto restores median alpha retention to **1.000** with no differential loss between groups (p = 0.86). `dataset_v2` was then built: 98/108 subjects processed, 10 skipped as EC/EO-ambiguous. A post-veto rejection audit surfaced a **new, separate issue**: 250 µV epoch rejection removes EC epochs at roughly 1.5× the rate of EO (32.0% vs 20.5%, systematic across 87/108 subjects) — a threshold problem that also erodes the alpha-blocking signal the EC/EO splitter depends on. Per-channel interpolation (to stop discarding ~17 clean channels per rejected epoch) is still outstanding |
-| 2 — Baseline model + classical features + fusion | 🟡 All three pipelines built and connected end to end (§6P, §6Q). A first real (short, capped) CV run against `dataset_v2` — scalogram representation, 5 folds × 3 epochs — landed at **63.0% ± 11.6% accuracy** (sensitivity 45.6%, specificity 80.7%, AUC 0.669), below both the 75.8%/84.5% baselines. This is a proof-of-chain run, not a Phase 2 result: 3 epochs is far short of convergence, only one of three image representations has been tried, and CV accuracy is still optimistically biased (§6R) |
+| 1 — Data pipeline | 🟡 **Built, found compromised, cause fixed — regeneration pending.** 108 subjects, ~122,000 images. ICA was removing genuine occipital alpha (median retention 0.643); a topography veto restores it to **1.000**. The existing images still come from the old behaviour and must be regenerated |
+| 2 — Baseline model + classical features + fusion | 🟡 **First unbiased CNN result: AUC 0.503 — chance.** §6R fixed and verified. The scalogram arm, fine-tuned end-to-end, does not generalise. Untested: frozen backbone, topomap arm, classical baseline, fusion |
 | 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
 | 4 — Literature review + paper writing | ⬜ Not started |
 | 5 — Backend, dashboard, AWS deployment | 🟡 `/predict` endpoint built and tested against a toy model; everything else not started |
@@ -51,9 +51,9 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 >
 > **The fix is a topography veto** — a spatial sanity check on a spectral detector, the same shape as the physical plausibility check the EC/EO changepoint detector needed. A component is excluded only if it peaks in the region its detection reason implies *and* is focal there (focality > 2.0). Validated on 20 subjects: median alpha retention **0.643 → 1.000**, range 0.977–1.015, and the components still removed now match the reference profile for genuine ocular artifact (occipital 0.259, frontal 3.379 against a reference 0.09 / 4.05).
 >
-> **Update: confirmed on the full cohort and regenerated.** `training/audit_ica_alpha.py` re-run on all 108 subjects: 71 components excluded, median occipital weight 0.237 vs. median frontal weight 3.412 (0/71 occipital-dominant), matching the reference ocular profile. Retention loss is **not differential between groups** at full scale either (ADHD median excluded 1.0, Control 0.5, Mann-Whitney p = 0.86; corr(components removed, alpha retained) = +0.12) — the earlier n=20 wobble (p = 0.096) was noise. Verdict logged in `audit_veto.log`: alpha is preserved, proceed to training. `dataset_v2` was then built from the vetoed pipeline (98/108 subjects imaged, 10 skipped as EC/EO-ambiguous — see `build_v2.log`).
+> **The ~122k existing images still come from the old behaviour and must be regenerated**, bundled with per-channel epoch interpolation. One 5-hour run.
 >
-> **Per-channel interpolation was *not* bundled into that regeneration run**, and a follow-up audit (`training/audit_rejection.py` → `audit_rejection_postveto.log`) found a second, independent problem at the 250 µV epoch-rejection threshold: it removes EC epochs systematically more than EO (mean 32.0% vs. 20.5%, EC > EO in 87/108 subjects), which both discards more of the condition the biomarkers most rely on and quietly damages the alpha-blocking contrast the EC/EO splitter uses. Rejection is dominated by a small number of frontal/frontopolar channels (Fp1, Fp2, F7, F8) plus O1/O2, with a mean of only 3.1/19 channels driving rejection per subject — i.e., largely localized, which is exactly the case per-channel interpolation is meant for. This still needs doing before `dataset_v2` is treated as final.
+> The loss was **not differential between groups** (ADHD 0.629, Control 0.651, p = 0.68), so preprocessing was not manufacturing a between-group difference. Worth re-confirming post-veto on the full cohort before regenerating.
 
 ### What's built
 
@@ -75,8 +75,7 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 
 These were found by running code against real data, not by reading it. Items resolved since are listed under "Real problems found and solved" below rather than deleted, so the record of what broke stays intact.
 
-1. ~~All generated images and classical features are stale~~ **Superseded** — `dataset_v2` regenerates images under the topography veto, but per-channel interpolation is still outstanding (see "Known limitations"), and classical features have not yet been rebuilt against it.
-1b. **`dataset_v2` build skipped 10 subjects as EC/EO-ambiguous** (`build_v2.log`), and the scalogram smoke CV run separately reported 7 subjects with no CNN prediction at all (partial overlap expected, not yet reconciled) — `run_fusion_cv()` will silently train on fewer subjects than the full cohort until this is resolved.
+1. **All generated images and classical features are stale.** They were produced before artifact rejection existed, and must be regenerated. Epoch counts per subject will drop by differing amounts, so the condition balance needs re-measuring too.
 2. **No QC policy for problem subjects.** The pipeline now warns above 30% epoch rejection and flags subjects where ICA component removal hits the cap, but there's no rule for whether to include, exclude, or flag them. **F09080101 specifically needs manual inspection** — muscle detection flags 14 of its 19 components at MNE's default threshold, meaning its decomposition is dominated by high-frequency structure. Needs deciding before Phase 2.
 3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
 4. **CV accuracy will be optimistically biased (§6R).** Ultralytics selects `best.pt` by accuracy on the val fold, and evaluation then scores on that same fold. `evaluate_on_test()` already avoids this for the final model via an inner validation fold; the CV loop itself still needs the same treatment.
@@ -156,6 +155,36 @@ Caveats in both directions: n=20 is small and the CIs are wide, so this is *no e
 
 **What this means for the project.** The negative result is a finding with citations, not an absence of results — and it sharpens the comparison rather than weakening it. If the CNN succeeds where the classical marker fails, the interesting question becomes *what it is seeing*, which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. The literature also names two specific confounds that point directly at better features: **aperiodic exponent/offset** (a slope difference shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends) and **individual alpha peak frequency** (a child with IAF at 7-8 Hz has genuine alpha power inside the theta window). Both are computable from data already in hand.
 
+## First unbiased result: the CNN is at chance
+
+30 epochs, 5 folds, 84 development subjects, on a Colab T4:
+
+| | |
+|---|---|
+| accuracy | **0.487 ± 0.155**  (95% CI 0.380 – 0.594) |
+| sensitivity | 0.422 ± 0.298 |
+| specificity | 0.545 ± 0.153 |
+| **auc** | **0.503 ± 0.180** |
+
+Against baselines of 0.758 (SVM) and 0.845 (FS + LR).
+
+**The apparent signal in an earlier smoke run was the selection bias.** Before §6R was fixed, a 3-epoch run reported AUC 0.669. After the three-way split removed the bias, 30 epochs reports 0.503. That difference is what a reviewer would have caught — and it is the strongest argument for having done the methodological work first.
+
+**The training curve says why:** training loss reaches 0.0004 by epoch 30 (all 14,470 images memorised) while validation accuracy never beats epoch 1 and stays flat near 0.53. With 1.44M parameters against roughly 50 training subjects per fold, the network learns *which subject* an image came from. Subject identity does not transfer, and subject-wise CV correctly refuses to reward it — `subject_split.py` doing exactly what it exists for. An epoch-level split would have reported a spectacular and meaningless number.
+
+**What this establishes:** `yolov8n-cls` on 224×224 scalograms, fine-tuned end-to-end for 30 epochs, does not learn generalisable ADHD/Control discrimination on this cohort.
+
+**What it does not:** that the representation carries no signal. Untested — a frozen backbone or linear probe (the capacity, not the epoch count, is the likely problem), early stopping, the topomap arm, coherence as tabular features, the expanded classical feature set, and the fusion classifier.
+
+**Two arms measured so far, both at chance:**
+
+| feature | AUC |
+|---|---|
+| TBR — EC / EO / VCPT | 0.43 / 0.49 / 0.55 |
+| CNN on scalograms | 0.503 |
+
+---
+
 **TBR is unstable under reasonable methodological variation — measured, not assumed.** Three implementation choices, each moving the same feature on the same data:
 
 | Choice | Shift in TBR |
@@ -178,17 +207,16 @@ This is an independent replication, on this dataset, of the 2020 five-algorithm 
 
 ## What's next
 
-1. ~~Confirm the veto on the full cohort~~ **Done** — full-cohort audit confirms median retention 1.000 with no differential group loss (p = 0.86).
-2. ~~Regenerate the cohort~~ **Done, partially** — `dataset_v2` was built with the topography veto, but *without* per-channel interpolation. A follow-up audit found the 250 µV rejection threshold removes EC epochs systematically more than EO (32.0% vs 20.5%), so this isn't the final dataset yet.
-3. **Add per-channel interpolation for epoch rejection** and rebuild once more (`dataset_v3`, or re-tag in place) — rejection is localized to a handful of channels (mean 3.1/19), which is exactly what interpolation is for. Do this before treating any accuracy number below as meaningful.
-4. ~~Prove the chain with a reduced smoke run~~ **Done, for one representation** — 5-fold CV, 3 epochs, scalogram only, against `dataset_v2`: 63.0% ± 11.6% accuracy, 45.6% sensitivity, 80.7% specificity, AUC 0.669. Below both baselines, as expected from a 3-epoch capped run; not a Phase 2 result. Repeat once per representation (topomap, coherence) once interpolation lands.
-5. **Compute TBR on the continuous segment** rather than 1.5 s epochs, which cap frequency resolution at 0.67 Hz.
-6. **Expand the classical feature set** — relative band power per channel per condition, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries. Now critical path.
-7. **Close the last Phase 2 gap** — add an inner validation split to the CV loop (§6R) so epoch selection stops leaking. Out-of-fold probabilities (§6P) and held-out test evaluation (§6Q) are both done.
-8. **Phase 2 — the critical checkpoint:** real subject-wise 5-fold CV, full epoch budget, for all three approaches, with significance tests against 75.8% and 84.5%.
-9. **Phase 3** — Grad-CAM and clinical-plausibility against the real trained model.
-10. **Phase 4** — literature review, paper writing.
-11. **Phase 5** — dashboard, AWS deployment.
+1. **Confirm the veto on the full cohort** — 20-subject validation gives median retention 1.000, but the between-group difference p moved from 0.676 to 0.096 at that sample size. Almost certainly noise, but *differential* exclusion between groups would be a confound. 1.5 hours, cheap next to a 5-hour regeneration built on it.
+2. **Regenerate the cohort once, with both pipeline fixes** — the topography veto, and per-channel interpolation for epoch rejection (only 1.4 of 19 channels drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch). ~5 hours; do them together.
+3. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against the regenerated images.
+4. **Compute TBR on the continuous segment** rather than 1.5 s epochs, which cap frequency resolution at 0.67 Hz.
+4. **Expand the classical feature set** — relative band power per channel per condition, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries. Now critical path.
+5. **Close the last Phase 2 gap** — add an inner validation split to the CV loop (§6R) so epoch selection stops leaking. Out-of-fold probabilities (§6P) and held-out test evaluation (§6Q) are both done.
+6. **Phase 2 — the critical checkpoint:** real subject-wise 5-fold CV for all three approaches, with significance tests against 75.8% and 84.5%.
+7. **Phase 3** — Grad-CAM and clinical-plausibility against the real trained model.
+8. **Phase 4** — literature review, paper writing.
+9. **Phase 5** — dashboard, AWS deployment.
 
 ---
 
@@ -269,8 +297,8 @@ $env:ADHD_YOLO_DATA_ROOT = "D:\ADHD-Faezeh Rohani-edf"
 - P300 latency/amplitude and per-condition behavioral features are unavailable pending clarification from the dataset source.
 - **The per-frequency-row normalization applied to scalograms removes absolute band-power relationships**, which means the theta/beta ratio is not recoverable from the scalogram images by design. This was a fix for a visual problem that has a signal-content cost, and needs revisiting.
 - Grad-CAM and the clinical-plausibility check have not been run against a real trained model.
-- **The original 122k-image dataset must not be trained on** (superseded by `dataset_v2`, built with the topography veto). It was generated before the veto, when ICA was removing a median 36% of occipital alpha.
-- **`dataset_v2` is itself not final.** It was built with the veto but without per-channel interpolation for epoch rejection, and a post-veto audit found the 250 µV threshold rejects EC epochs systematically more than EO (32.0% vs 20.5% mean, 87/108 subjects) — a threshold problem, not a subject problem, and one that erodes the alpha-blocking contrast the EC/EO splitter relies on.
+- **The current 122k-image dataset must not be trained on.** It was generated before the topography veto, when ICA was removing a median 36% of occipital alpha. The cause is fixed; the images are not. Regeneration is required.
 - **The ICA component detectors are unreliable and the veto is a guard, not a repair.** `find_bads_eog` and `find_bads_muscle` place artifact correctly only 48% of the time. The veto discards their bad output, but roughly a third of subjects consequently receive zero component exclusions — ICA effectively off, with epoch rejection as the only artifact control. `mne-icalabel`, which classifies from topography and spectrum together, is the principled replacement and has not been evaluated.
-- **No Phase 2 result exists yet.** A first real (but short, capped) CV run against `dataset_v2` — scalogram representation only, 5 folds × 3 epochs — scored 63.0% ± 11.6% accuracy, 45.6% sensitivity, 80.7% specificity, AUC 0.669, below both the 75.8%/84.5% baselines. This is a proof-of-chain smoke result, not a Phase 2 claim: 3 epochs, one representation, no inner-validation fix for §6R, and it predates the interpolation fix above.
+- **The CNN arm is at chance (AUC 0.503).** One architecture, one representation, one hyperparameter setting, on 84 development subjects — but it is a clean, unbiased measurement and it is reported as the result it is.
+- **n = 84 development subjects, ~17 per fold.** Sensitivity varies ±0.298 between folds and one fold scored below chance, so most fold-to-fold spread is which subjects landed where rather than model skill. Any accuracy figure from this cohort carries confidence intervals wide enough to overlap the published baselines.
 - This is a research/decision-support tool. It does not diagnose ADHD and is not a replacement for clinical evaluation.
