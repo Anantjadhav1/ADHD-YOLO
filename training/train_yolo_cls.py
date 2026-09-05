@@ -69,6 +69,30 @@ DISABLE_AUGMENTATION = dict(
 TRAINING_SEED = 42
 REPRODUCIBILITY = dict(seed=TRAINING_SEED, deterministic=True)
 
+# --- Capacity control -------------------------------------------------------
+#
+# The 2026-09-02 run reached training loss 0.0004 by epoch 30 -- all 14,470
+# images memorised -- while validation accuracy never beat epoch 1 and sat flat
+# near 0.53. Final AUC was 0.503, exactly chance.
+#
+# The diagnosis is CAPACITY, not epoch count. yolov8n-cls has 1.44M trainable
+# parameters and each fold trains on roughly 50 subjects. At that ratio the
+# network can learn WHICH SUBJECT an image came from, and subject identity does
+# not transfer to unseen subjects -- which is precisely what subject-wise CV
+# refuses to reward. An epoch-level split would have reported a spectacular and
+# meaningless number here instead.
+#
+# FREEZE_LAYERS freezes the first N modules of the backbone, so ImageNet
+# features are reused rather than re-learned and only the later layers plus the
+# head adapt. yolov8n-cls has 10 backbone modules; freeze=10 is a linear probe
+# in all but name, freeze=8 leaves the last block trainable.
+#
+# PATIENCE stops when the INNER fold plateaus. In every fold observed, epoch 1
+# was the best epoch, so 29 of 30 were wasted GPU time.
+FREEZE_LAYERS = 8
+PATIENCE = 5
+CAPACITY_CONTROL = dict(freeze=FREEZE_LAYERS, patience=PATIENCE)
+
 
 def verify_augmentation_disabled(run_dir) -> dict:
     """Read args.yaml from a finished run and confirm augmentation really is off.
@@ -534,7 +558,8 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
             run_name = f"{representation}_{outer_fold}"
             model.train(data=ds_root, epochs=epochs, imgsz=imgsz,
                         project=abs_output_dir, name=run_name, exist_ok=True,
-                        **DISABLE_AUGMENTATION, **REPRODUCIBILITY)
+                        **DISABLE_AUGMENTATION, **REPRODUCIBILITY,
+                        **CAPACITY_CONTROL)
             verify_augmentation_disabled(Path(abs_output_dir) / run_name)
 
             # Score the OUTER fold, read straight from images_root. NOT
