@@ -589,6 +589,24 @@ def run_cv(manifest_path: str, images_root: str, representation: str,
                   f"acc={metrics['accuracy']:.3f} sens={metrics['sensitivity']:.3f} "
                   f"spec={metrics['specificity']:.3f} auc={metrics['auc']:.3f}")
 
+            # Copy results out after EVERY fold, not once at the end.
+            #
+            # Two Colab sessions were recycled mid-run and lost every completed
+            # fold, because the only copy to persistent storage happened after
+            # the loop finished. A 5-fold run is ~3 hours; losing all of it to a
+            # disconnect at fold 4 is a bad trade against three lines here.
+            #
+            # Failure to back up must NOT kill the run -- a full Drive or a
+            # dropped mount is a worse reason to lose training than the
+            # disconnect this guards against.
+            backup_dir = os.environ.get("ADHD_YOLO_BACKUP_DIR")
+            if backup_dir:
+                try:
+                    shutil.copytree(abs_output_dir, backup_dir, dirs_exist_ok=True)
+                    print(f"  backed up -> {backup_dir}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"  BACKUP FAILED (continuing): {e}")
+
     results_df = pd.DataFrame(fold_metrics)
     print("\nMean ± std across folds:")
     for col in ["accuracy", "sensitivity", "specificity", "auc"]:
