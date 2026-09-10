@@ -32,7 +32,7 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 |---|---|
 | 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
 | 1 — Data pipeline | 🟡 **Built, found compromised, cause fixed — regeneration pending.** 108 subjects, ~122,000 images. ICA was removing genuine occipital alpha (median retention 0.643); a topography veto restores it to **1.000**. The existing images still come from the old behaviour and must be regenerated |
-| 2 — Baseline model + classical features + fusion | 🟡 **First unbiased CNN result: AUC 0.503 — chance.** §6R fixed and verified. The scalogram arm, fine-tuned end-to-end, does not generalise. Untested: frozen backbone, topomap arm, classical baseline, fusion |
+| 2 — Baseline model + classical features + fusion | 🟡 **CNN arm measured and negative — four estimates, all at chance.** Both representations, both capacity settings, pooled AUC 0.50–0.55 with every CI containing 0.5. Untested: classical baseline on the expanded feature set, and fusion |
 | 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
 | 4 — Literature review + paper writing | ⬜ Not started |
 | 5 — Backend, dashboard, AWS deployment | 🟡 `/predict` endpoint built and tested against a toy model; everything else not started |
@@ -155,33 +155,36 @@ Caveats in both directions: n=20 is small and the CIs are wide, so this is *no e
 
 **What this means for the project.** The negative result is a finding with citations, not an absence of results — and it sharpens the comparison rather than weakening it. If the CNN succeeds where the classical marker fails, the interesting question becomes *what it is seeing*, which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. The literature also names two specific confounds that point directly at better features: **aperiodic exponent/offset** (a slope difference shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends) and **individual alpha peak frequency** (a child with IAF at 7-8 Hz has genuine alpha power inside the theta window). Both are computable from data already in hand.
 
-## First unbiased result: the CNN is at chance
+## The CNN arm is measured, and the result is negative
 
-30 epochs, 5 folds, 84 development subjects, on a Colab T4:
+Four independent estimates on the same 84 development subjects (42 ADHD / 42 Control, so 0.5 is a genuine chance baseline):
 
-| | |
-|---|---|
-| accuracy | **0.487 ± 0.155**  (95% CI 0.380 – 0.594) |
-| sensitivity | 0.422 ± 0.298 |
-| specificity | 0.545 ± 0.153 |
-| **auc** | **0.503 ± 0.180** |
+| | pooled AUC | 95% CI | permutation p |
+|---|---|---|---|
+| TBR (best condition, VCPT) | 0.550 | — | — |
+| CNN scalogram, full fine-tune | 0.503 | — | — |
+| CNN scalogram, frozen backbone | **0.521** | [0.397, 0.641] | 0.311 |
+| CNN topomap, frozen backbone | **0.523** | [0.393, 0.647] | 0.368 |
 
-Against baselines of 0.758 (SVM) and 0.845 (FS + LR).
+Every confidence interval contains 0.5. Baselines to beat were 0.758 and 0.845.
 
-**The apparent signal in an earlier smoke run was the selection bias.** Before §6R was fixed, a 3-epoch run reported AUC 0.669. After the three-way split removed the bias, 30 epochs reports 0.503. That difference is what a reviewer would have caught — and it is the strongest argument for having done the methodological work first.
+**The bias mattered more than the model.** Before §6R was fixed, a 3-epoch run reported AUC 0.669. After the three-way split removed the selection bias, 30 epochs reports 0.503. That gap is what a reviewer would have caught, and it is the strongest argument for having done the methodological work before the modelling work.
 
-**The training curve says why:** training loss reaches 0.0004 by epoch 30 (all 14,470 images memorised) while validation accuracy never beats epoch 1 and stays flat near 0.53. With 1.44M parameters against roughly 50 training subjects per fold, the network learns *which subject* an image came from. Subject identity does not transfer, and subject-wise CV correctly refuses to reward it — `subject_split.py` doing exactly what it exists for. An epoch-level split would have reported a spectacular and meaningless number.
+**Capacity was a real problem, but not the problem.** The full fine-tune reached training loss 0.0004 by epoch 30 — all 14,470 images memorised — while validation accuracy never beat epoch 1. With 1.44M parameters against ~50 training subjects per fold, the network learns *which subject* an image came from, and subject identity does not transfer. Freezing the backbone fixed that mechanically: loss plateaued at 0.060 and validation rose across epochs instead of decaying. Out-of-sample discrimination stayed at chance regardless.
 
-**What this establishes:** `yolov8n-cls` on 224×224 scalograms, fine-tuned end-to-end for 30 epochs, does not learn generalisable ADHD/Control discrimination on this cohort.
+**The fold spread is the most instructive number here.** Topomap, per fold:
 
-**What it does not:** that the representation carries no signal. Untested — a frozen backbone or linear probe (the capacity, not the epoch count, is the likely problem), early stopping, the topomap arm, coherence as tabular features, the expanded classical feature set, and the fusion classifier.
+| fold_0 | fold_1 | fold_2 | fold_3 | fold_4 |
+|---|---|---|---|---|
+| **0.833** | 0.347 | **0.750** | 0.365 | 0.375 |
 
-**Two arms measured so far, both at chance:**
+Fold-mean 0.534, pooled 0.523. Five folds of ~17 subjects produced AUCs from 0.35 to 0.83 when the true value is near chance. **Reporting `fold_0` alone would have given "AUC 0.833, comparable to published work"** — and a single train/test split on this cohort would have produced exactly that.
 
-| feature | AUC |
-|---|---|
-| TBR — EC / EO / VCPT | 0.43 / 0.49 / 0.55 |
-| CNN on scalograms | 0.503 |
+**The prediction distributions confirm it.** Topomap: ADHD mean probability 0.498, Control 0.491 — a difference of 0.007. Scalogram: 0.499 vs 0.488, with 38 of 84 predictions falling within 0.05 of the decision threshold. The classes are superimposed; the model has no opinion. Threshold tuning cannot help — even choosing the cutoff *with knowledge of the labels* leaves scalogram accuracy at 0.548.
+
+**What this establishes:** on 84 subjects, `yolov8n-cls` on EEG-derived images — scalograms or topomaps, fine-tuned end to end or with a frozen backbone — does not discriminate ADHD from Control.
+
+**What it does not:** that EEG carries no signal, that a different architecture would fail, or that this holds at n=500. It is a bounded negative result about a specific approach at a specific sample size — better evidenced than most positive results in this literature, because the memorisation curve, the fold spread, the balanced classes and the permutation tests all agree.
 
 ---
 
@@ -233,6 +236,7 @@ adhd-yolo/
 │   └── build_classical_features.py  # batch driver: classical features CSV per subject
 ├── training/
 │   ├── classical_features.py        # TBR (theta/beta ratio) biomarker computation
+│   ├── recover_fold_metrics.py      # rescore folds from saved weights, no retraining
 │   ├── verify_tbr.py                # diagnostic: TBR variant comparison (read-only)
 │   ├── sweep_muscle_threshold.py    # diagnostic: ICA muscle threshold sensitivity
 │   ├── train_yolo_cls.py            # yolov8n-cls training + subject-level evaluation
@@ -299,6 +303,7 @@ $env:ADHD_YOLO_DATA_ROOT = "D:\ADHD-Faezeh Rohani-edf"
 - Grad-CAM and the clinical-plausibility check have not been run against a real trained model.
 - **The current 122k-image dataset must not be trained on.** It was generated before the topography veto, when ICA was removing a median 36% of occipital alpha. The cause is fixed; the images are not. Regeneration is required.
 - **The ICA component detectors are unreliable and the veto is a guard, not a repair.** `find_bads_eog` and `find_bads_muscle` place artifact correctly only 48% of the time. The veto discards their bad output, but roughly a third of subjects consequently receive zero component exclusions — ICA effectively off, with epoch rejection as the only artifact control. `mne-icalabel`, which classifies from topography and spectrum together, is the principled replacement and has not been evaluated.
-- **The CNN arm is at chance (AUC 0.503).** One architecture, one representation, one hyperparameter setting, on 84 development subjects — but it is a clean, unbiased measurement and it is reported as the result it is.
+- **The CNN arm is at chance.** Four estimates spanning two representations and two capacity settings, pooled AUC 0.50–0.55, every CI containing 0.5. One architecture on 84 development subjects — but a clean, unbiased measurement, reported as the result it is.
+- **Fold-level metrics are unstable at this sample size.** ~17 subjects per fold produced AUCs from 0.35 to 0.83 in a single run. Report pooled out-of-fold values, never a single fold.
 - **n = 84 development subjects, ~17 per fold.** Sensitivity varies ±0.298 between folds and one fold scored below chance, so most fold-to-fold spread is which subjects landed where rather than model skill. Any accuracy figure from this cohort carries confidence intervals wide enough to overlap the published baselines.
 - This is a research/decision-support tool. It does not diagnose ADHD and is not a replacement for clinical evaluation.

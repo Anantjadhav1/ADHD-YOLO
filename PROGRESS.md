@@ -714,3 +714,48 @@ Neither is a failure of execution. TBR at chance replicates a well-established l
 **Operational note:** the Colab session dropped once mid-run (during fold 3) and had to be restarted from the beginning, because nothing was checkpointed to Drive between folds. Copying `runs/real` to Drive after each fold rather than at the end would make a dropped session cost one fold instead of all five.
 
 - **Next:** (1) frozen-backbone / linear-probe run; (2) early stopping; (3) topomap arm; (4) classical baseline + paired comparison; (5) fusion on real OOF probabilities.
+
+### 2026-09-09 — the CNN arm is measured and negative. Four estimates, all at chance.
+
+Two runs completed: the frozen-backbone scalogram arm and the frozen-backbone topomap arm. With the full fine-tune from 2026-09-02 and TBR, that is four independent measurements on the same 84 development subjects.
+
+| | pooled AUC | 95% CI | permutation p |
+|---|---|---|---|
+| TBR (best condition, VCPT) | 0.550 | — | — |
+| CNN scalogram, full fine-tune | 0.503 | — | — |
+| CNN scalogram, frozen (`freeze=8`) | **0.521** | [0.397, 0.641] | 0.311 |
+| CNN topomap, frozen (`freeze=8`) | **0.523** | [0.393, 0.647] | 0.368 |
+
+Every CI contains 0.5. Every p is far above 0.05. The development set is exactly balanced — 42 ADHD, 42 Control — so 0.5 is a genuine chance baseline rather than an artefact of class ratio.
+
+**The capacity fix worked mechanically and did not change the answer.** The 2026-09-02 full fine-tune reached training loss 0.0004 by epoch 30 with validation flat at 0.53 — total memorisation. With `freeze=8`, training loss plateaued at 0.060 and validation rose 0.617 -> 0.665 across epochs instead of peaking at epoch 1. The model stopped memorising subjects. Its out-of-sample discrimination stayed at chance regardless. Capacity was a real problem; it was not *the* problem.
+
+**Topomap fit even worse.** Training loss moved only 0.679 -> 0.596 over 15 epochs with validation flat near 0.57 — the frozen ImageNet features transfer poorly to head-shaped band-power maps, which sit much further from natural images than scalograms do. Pooled AUC landed at the same place anyway.
+
+**A correction from the previous session.** During the frozen scalogram run I reported "fold_0 AUC 0.681" as the first sign of a model learning something transferable. That number was **image-level validation accuracy on the INNER fold** — the data Ultralytics uses to select a checkpoint. Fold_0's actual subject-level AUC on the outer fold was **0.486**. Two different quantities on two different datasets, compared as though they were the same. That is precisely the confusion §6R exists to prevent, and I walked into it while reading a progress bar.
+
+**The fold spread is the most reportable thing here.** Topomap, per fold:
+
+```
+fold_0  AUC 0.833      fold_1  AUC 0.347
+fold_2  AUC 0.750      fold_3  AUC 0.365
+                       fold_4  AUC 0.375
+```
+
+Fold-mean 0.534, pooled 0.523. **Five folds of ~17 subjects produced AUCs from 0.35 to 0.83 when the true value is near chance.** Reporting `fold_0` alone would have given "AUC 0.833, comparable to published work" — and a single train/test split on this cohort would have produced exactly that. This is a concrete, measured illustration of why small-n EEG results are unstable, generated on our own data rather than cited.
+
+**Prediction distributions confirm it.** Topomap: ADHD mean probability 0.498, Control 0.491, difference **+0.007**. Scalogram: 0.499 vs 0.488, difference +0.011, with 38 of 84 predictions falling within 0.05 of the decision threshold. The classes are superimposed. The model is not confidently wrong — it has no opinion. Threshold tuning cannot help: even choosing the cutoff with knowledge of the labels moves scalogram accuracy from 0.548 to 0.548.
+
+**Recovered rather than re-run.** A fourth Colab session was recycled after the topomap loop finished all five folds but before `run_cv` returned. The per-fold backup added on 2026-09-05 had saved every fold's `weights/best.pt`, but `fold_metrics` and `oof_frames` live in memory until the loop ends — so all five trained models survived and every subject-level number was lost. Wrote `training/recover_fold_metrics.py`, which reloads each `best.pt` and re-scores its outer fold. Minutes instead of three hours.
+
+It records `inner_val_fold` as `"unknown (recovered run)"` rather than reconstructing it from the rotation rule — that would be an assumption dressed as data. It also refuses to run if the run directories do not match `<representation>_<fold>`, since it identifies the outer fold from the directory name and guessing would silently produce in-sample numbers.
+
+**A gap this exposed:** `run_cv` writes its summary CSVs only after the loop. Both should be written incrementally inside it, so a crash at fold 5 costs the last fold's metrics rather than all five. The recovery script makes that survivable; writing them per fold would make it unnecessary.
+
+**What this establishes.** On 84 subjects, `yolov8n-cls` on EEG-derived images — scalograms or topomaps, fine-tuned end to end or with a frozen backbone — does not discriminate ADHD from Control. Four estimates, two representations, two capacity settings, all within 0.50–0.55.
+
+**What it does not.** That EEG carries no signal, that a different architecture would fail, or that the result would hold at n=500. It is a bounded negative result about a specific approach at a specific sample size, and it is better evidenced than most positive results in this literature — because the memorisation curve, the fold spread, the balanced classes and the permutation tests all say the same thing.
+
+**Remaining untested:** the classical baseline on the expanded feature set, and the fusion classifier, which has still never run on real out-of-fold probabilities. Both need no GPU. The classical baseline is now the highest-value work left — not because it is likely to succeed, but because it is the only route to a statistically valid comparison against the 75.8% figure, and a paired test showing two methods are *equivalently* poor is itself reportable.
+
+- **Next:** (1) `classical_baseline.py` — SVM on engineered features, same folds, same three-way split, output shaped to join the OOF tables; (2) `paired_comparison.py` — McNemar plus paired bootstrap; (3) fusion on real OOF probabilities; (4) write `run_cv`'s summary CSVs incrementally.
