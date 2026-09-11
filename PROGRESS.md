@@ -771,3 +771,47 @@ The classical arm is now nominally best (0.556 vs 0.522/0.523), and the paired t
 **Decision: stop measuring.** Six measurements, three method families, all CIs containing 0.5, and the top features are arousal and artifact. A seventh measurement adds a row to a table that already says the same thing six times.
 
 - **Next:** (1) fusion once, for completeness — expect ~0.53, the kappa values say the arms are wrong about different subjects but none carries signal to combine; (2) email the dataset author about VCPT trigger coding, the one thing that could still change the picture since Rohani's 826 features included P300 and behavioural measures; (3) write the methods draft from this log.
+
+
+### 2026-09-11b — fusion completes the table. Phase 2 is finished.
+
+`fusion_classifier.py` had no entry point — it was written as a library for `run_cv` to call, which is why it prints "Feed this to fusion_classifier.run_fusion_cv()" and why `python -m training.fusion_classifier` produced no output at all. Added a CLI wrapper.
+
+**Result: AUC 0.548 ± 0.027.**
+
+| arm | pooled / mean AUC | fold-to-fold sd |
+|---|---|---|
+| CNN scalogram, frozen | 0.522 | 0.106 |
+| CNN topomap, frozen | 0.523 | 0.237 |
+| Classical, 551 features | 0.556 | 0.187 |
+| **Fusion (CNN + classical)** | **0.548** | **0.027** |
+
+Fusion lands *between* its inputs and below the classical arm alone. Exactly what the kappa values predicted: the arms disagree at near-chance rates (+0.020 to +0.284), so they are wrong about different subjects — but none carries signal to combine, and stacking near-random predictors gives a near-random predictor.
+
+**One detail worth keeping.** Fusion's fold-to-fold variance is far smaller than any single arm: **±0.027 against ±0.106, ±0.187 and ±0.237.** That is real and mechanistically expected — averaging two uncorrelated predictors reduces variance. It just does not add signal. Variance reduction around a chance-level mean is still chance, and it is a good illustration of why a stable-looking number is not the same as an informative one.
+
+**On the split used.** `run_fusion_cv` uses a two-way split rather than the §6R three-way one. That is acceptable here and not an oversight: the fusion model is a logistic regression with no checkpoint selection, so there is no best-epoch-chosen-on-X to leak, and the CNN probabilities feeding it were already out-of-fold. The residual issue is the standard stacking leak — subject S in fold 2 gets a CNN probability from a model trained on folds 0,1,3,4, while the fusion LR's training subjects have probabilities from models that included fold 2. Mild, well documented in the stacking literature, and with every arm at chance it cannot be what decides the result. Stated rather than fixed.
+
+---
+
+**PHASE 2 IS COMPLETE.** Final table, same 84 development subjects (42 ADHD / 42 Control):
+
+| arm | AUC | 95% CI | permutation p |
+|---|---|---|---|
+| TBR (best condition, VCPT) | 0.550 | — | — |
+| CNN scalogram, full fine-tune | 0.503 | — | — |
+| CNN scalogram, frozen | 0.522 | [0.397, 0.641] | 0.311 |
+| CNN topomap, frozen | 0.523 | [0.393, 0.647] | 0.368 |
+| Classical, 301 power features | 0.517 | [0.398, 0.640] | 0.400 |
+| Classical, 551 with coherence | 0.556 | [0.416, 0.660] | 0.268 |
+| Fusion | 0.548 | — | — |
+
+Every confidence interval contains 0.5. Every paired difference between arms is non-significant (p = 0.639 to 0.992). Baselines to beat were 0.758 and 0.845.
+
+**The code is done.** What remains is not experimental:
+
+1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August, and the single most plausible explanation for the gap between 0.556 and 0.758 — Rohani et al. used 826 features including P300 and behavioural measures, which the trigger channel in this dataset does not permit computing.
+2. **Supervisor conversation**, before writing rather than after.
+3. **Write.** PROGRESS.md is now 773 lines and most of it is already a methods section: every parameter with its justification, every threshold and how it was measured, every bug and what it would have cost.
+
+- **Next:** the paper.
