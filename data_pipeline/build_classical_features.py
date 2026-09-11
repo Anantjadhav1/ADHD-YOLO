@@ -34,7 +34,9 @@ def build_classical_features_table(manifest_path: str) -> pd.DataFrame:
             if "vcpt_epochs" in result:
                 epochs_by_task["VCPT"] = result["vcpt_epochs"]
 
-            feats = compute_classical_features(epochs_by_task)
+            raw_by_task = {k: result[v] for k, v in (("EC", "ec_raw"), ("EO", "eo_raw"))
+                           if v in result}
+            feats = compute_classical_features(epochs_by_task, raw_by_task)
             feats.update({"subject_id": subject_id, "group": row["group"], "split": row["split"]})
             rows.append(feats)
             print("ok")

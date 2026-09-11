@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADHD-YOLO — EEG classification prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* EEG chart paper and instrument panels, not a generic clinical wash */
+  --paper:#E9EDEA; --paper-lift:#F2F5F2; --ink:#16242B; --ink-soft:#4A5B62;
+  --trace:#2E6F8E; --chance:#B9863F; --flag:#9A4536; --rule:#C3CBC6;
+  --grid:rgba(46,111,142,.07);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font:400 16px/1.6 "IBM Plex Sans",system-ui,sans-serif;
+  /* Chart-paper grid: the only decoration, and it is structural -- EEG is
+     literally printed on this. */
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                   linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:24px 24px;
+}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.5rem 6rem;
+      border-left:1px solid var(--rule);position:relative}
+@media(max-width:52rem){.wrap{border-left:none}}
+h1,h2,h3{font-weight:600;line-height:1.25;letter-spacing:-.01em;margin:0}
+h1{font-size:1.5rem}
+h2{font-size:1.125rem;margin:0 0 .75rem}
+p{max-width:62ch;margin:0 0 1rem}
+.muted{color:var(--ink-soft)}
+.small{font-size:.875rem}
+
+header{padding:3rem 0 2rem;border-bottom:1px solid var(--rule)}
+.masthead{display:flex;gap:1.5rem;align-items:baseline;flex-wrap:wrap}
+header p{margin:.75rem 0 0}
+
+section{padding:2.5rem 0;border-bottom:1px solid var(--rule)}
+section:last-of-type{border-bottom:none}
+
+/* ---- upload ---- */
+.drop{
+  border:1px dashed var(--rule); background:var(--paper-lift);
+  padding:2rem 1.5rem; margin-bottom:1rem; transition:border-color .15s,background .15s;
+}
+.drop.over{border-color:var(--trace);background:#E4EEF2}
+.drop label{font-weight:500;display:block;margin-bottom:.35rem}
+.drop input[type=file]{font:inherit;font-size:.9375rem;max-width:100%}
+.drop .small{margin:.35rem 0 0}
+.filerow+.filerow{margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--rule)}
+
+button{
+  font:500 .9375rem/1 "IBM Plex Sans",sans-serif; padding:.7rem 1.25rem;
+  background:var(--ink); color:var(--paper); border:1px solid var(--ink);
+  cursor:pointer; transition:background .15s;
+}
+button:hover:not(:disabled){background:#22383F}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.ghost{background:transparent;color:var(--ink)}
+button.ghost:hover:not(:disabled){background:rgba(22,36,43,.06)}
+:focus-visible{outline:2px solid var(--trace);outline-offset:2px}
+.actions{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
+
+/* ---- the scale: the hero ---- */
+.scale{margin:2rem 0 .5rem;position:relative;height:5.5rem}
+.scale-track{position:absolute;left:0;right:0;top:2.25rem;height:2px;background:var(--ink)}
+.scale-band{
+  position:absolute;top:1.5rem;height:1.5rem;background:var(--chance);opacity:.22;
+}
+.scale-band-line{position:absolute;top:1.5rem;height:1.5rem;border-left:1px solid var(--chance);
+                 border-right:1px solid var(--chance)}
+.tick{position:absolute;top:2.25rem;width:1px;height:.5rem;background:var(--ink)}
+.tick.major{height:.85rem}
+.tick-label{position:absolute;top:3.3rem;transform:translateX(-50%);
+            font-size:.75rem;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.marker{position:absolute;top:.7rem;transform:translateX(-50%);text-align:center;transition:left .4s cubic-bezier(.4,0,.2,1)}
+.marker-stem{width:2px;height:2.1rem;background:var(--trace);margin:0 auto}
+.marker-dot{width:11px;height:11px;border-radius:50%;background:var(--trace);
+            margin:0 auto -3px;border:2px solid var(--paper)}
+.band-note{font-size:.8125rem;color:var(--chance);position:absolute;top:4.6rem;
+           transform:translateX(-50%)}
+
+.readout{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap;margin:0 0 .25rem}
+.readout .value{font:500 3rem/1 "IBM Plex Mono",monospace;letter-spacing:-.02em}
+.readout .label{font-size:1.0625rem;font-weight:500}
+
+.verdict{border-left:3px solid var(--flag);padding:.9rem 0 .9rem 1.1rem;margin:1.75rem 0 0;
+         background:rgba(154,69,54,.05)}
+.verdict p{margin:0;max-width:64ch}
+.verdict strong{font-weight:600}
+
+/* ---- images ---- */
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1.5rem}
+figure{margin:0}
+figure img{width:100%;display:block;border:1px solid var(--rule);background:var(--paper-lift)}
+figcaption{font-size:.8125rem;color:var(--ink-soft);margin-top:.5rem;max-width:40ch}
+
+/* ---- measurements ---- */
+table{border-collapse:collapse;width:100%;max-width:34rem;font-size:.9375rem}
+th,td{text-align:left;padding:.55rem .75rem .55rem 0;border-bottom:1px solid var(--rule)}
+th{font-weight:500;color:var(--ink-soft)}
+td.num{font-variant-numeric:tabular-nums;text-align:right;padding-right:0}
+caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:.6rem}
+
+.status{padding:.9rem 1.1rem;border-left:3px solid var(--trace);
+        background:rgba(46,111,142,.06);margin-bottom:1.25rem}
+.status.err{border-color:var(--flag);background:rgba(154,69,54,.06)}
+.status p{margin:0}
+[hidden]{display:none !important}
+.spin{display:inline-block;width:.85em;height:.85em;border:2px solid var(--paper);
+      border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;
+      vertical-align:-.1em;margin-right:.5rem}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="masthead">
+    <h1>ADHD-YOLO</h1>
+    <span class="muted small">EEG classification research prototype</span>
+  </div>
+  <p>Converts a child's resting-state EEG into time–frequency images and classifies them
+  ADHD or Control with a transfer-learned CNN. Built to test whether that approach works.</p>
+  <p class="muted"><strong>It does not.</strong> Measured across five methods on 84 subjects,
+  the classifier performs at chance. This interface shows what the pipeline computes and where
+  the prediction falls against that measured uncertainty.</p>
+</header>
+
+<section>
+  <h2>Analyse a recording</h2>
+  <div class="drop" id="drop">
+    <div class="filerow">
+      <label for="eoec">Resting-state recording (EOEC)</label>
+      <input type="file" id="eoec" accept=".edf,.EDF">
+      <p class="small muted">Eyes-closed and eyes-open, in one EDF file. Required.</p>
+    </div>
+    <div class="filerow">
+      <label for="vcpt">Attention task recording (VCPT)</label>
+      <input type="file" id="vcpt" accept=".edf,.EDF">
+      <p class="small muted">Optional. Adds the task-condition biomarkers.</p>
+    </div>
+  </div>
+  <div class="actions">
+    <button id="run" disabled>Analyse recording</button>
+    <button id="demo" class="ghost">Load a worked example</button>
+  </div>
+  <p class="small muted" style="margin-top:.9rem">The worked example uses stored results from
+  subject C09090107, so the interface can be shown without a running backend.</p>
+</section>
+
+<section id="results" hidden>
+  <h2>Result</h2>
+  <div id="status" class="status" hidden><p></p></div>
+
+  <div class="readout">
+    <span class="value" id="prob">—</span>
+    <span class="label" id="klass">probability of ADHD</span>
+  </div>
+  <p class="small muted" id="nepochs"></p>
+
+  <!-- The hero: a prediction placed against the band where it means nothing. -->
+  <div class="scale" id="scale" aria-hidden="true">
+    <div class="scale-band" id="band"></div>
+    <div class="scale-band-line" id="bandline"></div>
+    <div class="scale-track"></div>
+    <div class="marker" id="marker" style="left:50%">
+      <div class="marker-dot"></div><div class="marker-stem"></div>
+    </div>
+    <div class="band-note" id="bandnote">measured chance range</div>
+  </div>
+  <p class="small muted" style="max-width:64ch">The shaded range is the 95% confidence interval
+  measured for this model across 84 subjects: 0.397 to 0.641. A prediction inside it carries no
+  information about the child.</p>
+
+  <div class="verdict">
+    <p><strong>Not usable for screening.</strong> Pooled AUC 0.52 with the interval above
+    containing 0.5, and a permutation test at p = 0.31. Five methods — two image
+    representations, two capacity settings and a 301-feature classical model — all land here.
+    Any single prediction from this system should be read as a coin flip.</p>
+  </div>
+</section>
+
+<section id="figures" hidden>
+  <h2>What the model was given</h2>
+  <div class="figs">
+    <figure>
+      <img id="fig-scal" alt="Scalogram: five EEG channels stacked, time on the horizontal axis and frequency on the vertical">
+      <figcaption>Scalogram. Five channels stacked; time across, frequency up. Colour encodes
+      power on three separate scales.</figcaption>
+    </figure>
+    <figure>
+      <img id="fig-cam" alt="Grad-CAM heat map overlaid on the scalogram, showing which regions influenced the prediction">
+      <figcaption>Grad-CAM. Where the network looked. On a chance-level model this shows
+      attention, not evidence.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="biomarkers" hidden>
+  <h2>Measured biomarkers</h2>
+  <p>Computed from the signal directly, independently of the network.</p>
+  <table>
+    <caption>Theta/beta ratio at F3, F4 and Fz. Published range for this age group is roughly
+    1.5 to 3.5.</caption>
+    <thead><tr><th>Condition</th><th style="text-align:right">Ratio</th></tr></thead>
+    <tbody id="tbr-rows"></tbody>
+  </table>
+  <p class="small muted" style="margin-top:1.25rem">Event-related and behavioural measures
+  (P300 latency and amplitude, omission and commission errors, reaction time) are shown as
+  unavailable rather than estimated. The task recordings' trigger channel does not encode the
+  stimulus conditions the source dataset describes, so these cannot be computed.</p>
+</section>
+
+<section>
+  <h2>What this is for</h2>
+  <p>A research instrument, not a clinical one. It does not diagnose ADHD, and no output from
+  it should inform a decision about a child. ADHD diagnosis requires clinical assessment.</p>
+  <p class="small muted">Dataset: Rohani et al. (2022), 108 children. Model: YOLOv8n-cls,
+  ImageNet-pretrained, subject-wise five-fold cross-validation with a held-out test split.</p>
+</section>
+
+</div>
+
+<script>
+const API = window.ADHD_API_BASE || "http://localhost:8000";
+// The 95% CI measured for this model across 84 development subjects. Hard-coded
+// deliberately: it is a property of the validated model, not of the uploaded
+// recording, and recomputing it per request would be meaningless.
+const CHANCE_LO = 0.397, CHANCE_HI = 0.641;
+
+const $ = id => document.getElementById(id);
+const eoec = $("eoec"), vcpt = $("vcpt"), runBtn = $("run"), demoBtn = $("demo");
+const status = $("status"), results = $("results");
+
+eoec.addEventListener("change", () => { runBtn.disabled = !eoec.files.length; });
+
+// Drag and drop onto the whole upload block.
+const drop = $("drop");
+["dragenter","dragover"].forEach(e => drop.addEventListener(e, ev => {
+  ev.preventDefault(); drop.classList.add("over");
+}));
+["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => {
+  ev.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", ev => {
+  const f = [...ev.dataTransfer.files].filter(f => /\.edf$/i.test(f.name));
+  if (!f.length) return say("That file is not an EDF recording. Drop a .edf file.", true);
+  const dt = new DataTransfer(); dt.items.add(f[0]);
+  eoec.files = dt.files; runBtn.disabled = false;
+});
+
+function say(msg, isError){
+  status.hidden = false;
+  status.classList.toggle("err", !!isError);
+  status.querySelector("p").innerHTML = msg;
+  results.hidden = false;
+}
+
+function drawScale(){
+  const scale = $("scale");
+  if (scale.dataset.drawn) return;
+  const pct = v => v * 100 + "%";
+  $("band").style.left = pct(CHANCE_LO);
+  $("band").style.width = pct(CHANCE_HI - CHANCE_LO);
+  $("bandline").style.left = pct(CHANCE_LO);
+  $("bandline").style.width = pct(CHANCE_HI - CHANCE_LO);
+  $("bandnote").style.left = pct((CHANCE_LO + CHANCE_HI) / 2);
+  for (let i = 0; i <= 10; i++){
+    const v = i / 10, major = i % 5 === 0;
+    const t = document.createElement("div");
+    t.className = "tick" + (major ? " major" : "");
+    t.style.left = pct(v); scale.appendChild(t);
+    if (major){
+      const l = document.createElement("div");
+      l.className = "tick-label"; l.style.left = pct(v);
+      l.textContent = v.toFixed(1); scale.appendChild(l);
+    }
+  }
+  scale.dataset.drawn = "1";
+}
+
+function render(r){
+  drawScale();
+  const p = r.predicted_class === "ADHD" ? r.confidence : 1 - r.confidence;
+  $("prob").textContent = p.toFixed(2);
+  $("klass").textContent = "probability of ADHD" +
+    (r.predicted_class ? " — classed as " + r.predicted_class : "");
+  $("nepochs").textContent = r.n_epochs_analyzed
+    ? `Averaged over ${r.n_epochs_analyzed.toLocaleString()} epochs from this recording.` : "";
+  $("marker").style.left = (p * 100) + "%";
+
+  if (r.gradcam_overlay_png_base64){
+    $("fig-cam").src = "data:image/png;base64," + r.gradcam_overlay_png_base64;
+    $("fig-scal").src = r.scalogram_png_base64
+      ? "data:image/png;base64," + r.scalogram_png_base64
+      : "data:image/png;base64," + r.gradcam_overlay_png_base64;
+    $("figures").hidden = false;
+  }
+
+  const c = r.classical_biomarkers || {};
+  const rows = [["Eyes closed","tbr_ec"],["Eyes open","tbr_eo"],["Attention task","tbr_vcpt"]]
+    .map(([name,key]) => {
+      const v = c[key];
+      return `<tr><td>${name}</td><td class="num">${
+        v == null || Number.isNaN(v) ? '<span class="muted">not available</span>' : v.toFixed(2)
+      }</td></tr>`;
+    }).join("");
+  $("tbr-rows").innerHTML = rows;
+  $("biomarkers").hidden = false;
+  results.hidden = false;
+  results.scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+runBtn.addEventListener("click", async () => {
+  const fd = new FormData();
+  fd.append("eoec_file", eoec.files[0]);
+  if (vcpt.files.length) fd.append("vcpt_file", vcpt.files[0]);
+
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<span class="spin"></span>Analysing';
+  say("Preprocessing, generating images and classifying every epoch. A full recording takes " +
+      "a few minutes.");
+
+  try{
+    const res = await fetch(API + "/predict", {method:"POST", body:fd});
+    if (res.status === 503){
+      const d = await res.json().catch(() => ({}));
+      // The honest message: this is the CURRENT state of the project.
+      return say("<strong>No trained model is loaded.</strong> The backend needs a checkpoint " +
+        "at <code>ADHD_YOLO_MODEL_PATH</code>. Use the worked example to see the interface. " +
+        (d.detail ? "<br><span class='small'>" + d.detail + "</span>" : ""), true);
+    }
+    if (!res.ok){
+      const d = await res.json().catch(() => ({}));
+      return say("<strong>That recording could not be processed.</strong> " +
+        (d.detail || `The server returned ${res.status}.`), true);
+    }
+    status.hidden = true;
+    render(await res.json());
+  } catch(e){
+    say("<strong>No response from the backend.</strong> Start it with " +
+      "<code>docker compose up</code>, or use the worked example.", true);
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = "Analyse recording";
+  }
+});
+
+// Stored output from a real run, so the interface can be demonstrated without a
+// backend. Values are the measured ones for C09090107, not invented.
+demoBtn.addEventListener("click", () => {
+  status.hidden = true;
+  render({
+    predicted_class: "Control",
+    confidence: 0.514,
+    n_epochs_analyzed: 240,
+    classical_biomarkers: {tbr_ec: 2.71, tbr_eo: 1.95, tbr_vcpt: 2.48,
+                           p300_latency_ms: null, p300_amplitude: null},
+    gradcam_overlay_png_base64: null
+  });
+  $("figures").hidden = true;
+  say("Showing stored results for subject C09090107 (Control). No backend was called.");
+});
+</script>
+</body>
+</html>

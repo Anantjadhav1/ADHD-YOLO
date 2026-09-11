@@ -715,47 +715,59 @@ Neither is a failure of execution. TBR at chance replicates a well-established l
 
 - **Next:** (1) frozen-backbone / linear-probe run; (2) early stopping; (3) topomap arm; (4) classical baseline + paired comparison; (5) fusion on real OOF probabilities.
 
-### 2026-09-09 — the CNN arm is measured and negative. Four estimates, all at chance.
+### 2026-09-11 — the classical arm closed, and the strongest features turn out to be arousal and artifact
 
-Two runs completed: the frozen-backbone scalogram arm and the frozen-backbone topomap arm. With the full fine-tune from 2026-09-02 and TBR, that is four independent measurements on the same 84 development subjects.
+Added the last physiologically distinct feature family and re-ran everything. Every measurement in this project until now derived from spectral POWER — TBR, relative band power, the aperiodic slope, and the scalogram/topomap images are power representations too. Coherence measures phase relationships between regions: whether they communicate, not how much each does. It was the one untested family and the source paper lists it among its five retained groups.
 
-| | pooled AUC | 95% CI | permutation p |
+**Summarised rather than enumerated.** A 19×19 matrix over 5 bands and 2 conditions is 1,710 pairwise values on 84 subjects — the selector would have been choosing among noise. Instead: 25 region-level summaries (21 region pairs, intra-left, intra-right, inter-hemispheric, overall) × 5 bands × 2 conditions = 250 features. Verified on a synthetic matrix with a seeded frontal–parietal link: the summary recovered 0.4000 for that pair and ~0.02 elsewhere.
+
+Imaginary coherence, not plain — the same choice made for the images, for the same reason. Plain coherence returned 0.98–0.999 across every channel pair regardless of scalp distance, which is volume conduction rather than connectivity.
+
+**Result: pooled AUC 0.517 → 0.538.** CI [0.416, 0.660], permutation p = 0.268. The first arm to move upward, and still not significant.
+
+**But coherence is not why it moved.** Coherence is **45% of the feature space and 15% of the top-20 features** — underrepresented threefold. The selector prefers relative band power. The shift is 250 extra columns giving it more chances to find something that separates 84 subjects, not connectivity carrying signal. `k_selected` remains unstable across folds (10, 10, 80, 10, 40), the same pattern as before: no subset is consistently useful.
+
+**The important finding is WHICH features the selector chose.**
+
+```
+8 of the top 20:  eyes-open alpha at Fp1, Fp2, F4, Cz, Pz, T6, O1, O2
+4 of the top 20:  gamma at Fp1, Fp2, O1, O2, Fz
+3 of the top 20:  coherence
+```
+
+Eyes-open alpha across the entire scalp is not an ADHD marker. It measures **how well a child suppressed alpha on opening their eyes** — arousal, drowsiness, compliance with the instruction. The alpha-reactivity work already showed 12 subjects with *reversed* reactivity, i.e. no alpha blocking at all.
+
+And gamma, per this project's own methods note, sits inside the 50 Hz filter transition band and is contaminated by residual EMG. Gamma at Fp1/Fp2 is eye and forehead muscle.
+
+**So the most discriminative measurements in this dataset are arousal state and muscle artifact, not brain pathology.** That is not a pipeline failure — it is the pipeline reporting honestly what actually varies between these children. It belongs in the discussion, and it is a better explanation for published positive results than "those authors were careless": a classifier trained on a cohort where ADHD children are more restless will learn restlessness, and subject-wise CV will reward it as long as restlessness is stable within a subject.
+
+**Final results table, six measurements on the same 84 subjects (42 ADHD / 42 Control):**
+
+| arm | pooled AUC | 95% CI | permutation p |
 |---|---|---|---|
 | TBR (best condition, VCPT) | 0.550 | — | — |
 | CNN scalogram, full fine-tune | 0.503 | — | — |
-| CNN scalogram, frozen (`freeze=8`) | **0.521** | [0.397, 0.641] | 0.311 |
-| CNN topomap, frozen (`freeze=8`) | **0.523** | [0.393, 0.647] | 0.368 |
+| CNN scalogram, frozen | 0.522 | [0.397, 0.641] | 0.311 |
+| CNN topomap, frozen | 0.523 | [0.393, 0.647] | 0.368 |
+| Classical, 301 power features | 0.517 | [0.398, 0.640] | 0.400 |
+| Classical, 551 features with coherence | **0.556** | [0.416, 0.660] | 0.268 |
 
-Every CI contains 0.5. Every p is far above 0.05. The development set is exactly balanced — 42 ADHD, 42 Control — so 0.5 is a genuine chance baseline rather than an artefact of class ratio.
+**Paired comparisons, all non-significant:**
 
-**The capacity fix worked mechanically and did not change the answer.** The 2026-09-02 full fine-tune reached training loss 0.0004 by epoch 30 with validation flat at 0.53 — total memorisation. With `freeze=8`, training loss plateaued at 0.060 and validation rose 0.617 -> 0.665 across epochs instead of peaking at epoch 1. The model stopped memorising subjects. Its out-of-sample discrimination stayed at chance regardless. Capacity was a real problem; it was not *the* problem.
+| pair | AUC difference | 95% CI | McNemar p | kappa |
+|---|---|---|---|---|
+| CNN scalogram vs CNN topomap | −0.001 | [−0.160, +0.163] | 1.000 | +0.020 |
+| CNN scalogram vs Classical | −0.035 | [−0.182, +0.110] | 0.856 | +0.284 |
+| CNN topomap vs Classical | −0.034 | [−0.187, +0.114] | 0.743 | +0.116 |
 
-**Topomap fit even worse.** Training loss moved only 0.679 -> 0.596 over 15 epochs with validation flat near 0.57 — the frozen ImageNet features transfer poorly to head-shaped band-power maps, which sit much further from natural images than scalograms do. Pooled AUC landed at the same place anyway.
+The classical arm is now nominally best (0.556 vs 0.522/0.523), and the paired test says that difference is not distinguishable from zero (p = 0.639 and 0.659). Reporting "the classical arm outperformed the CNN" from a 0.035 gap with that interval would be exactly the kind of claim this project exists to avoid making.
 
-**A correction from the previous session.** During the frozen scalogram run I reported "fold_0 AUC 0.681" as the first sign of a model learning something transferable. That number was **image-level validation accuracy on the INNER fold** — the data Ultralytics uses to select a checkpoint. Fold_0's actual subject-level AUC on the outer fold was **0.486**. Two different quantities on two different datasets, compared as though they were the same. That is precisely the confusion §6R exists to prevent, and I walked into it while reading a progress bar.
+**The kappa values remain the most interesting structure.** The two CNN representations agree at +0.020 — barely above two independent coin flips — despite being the same architecture, on the same subjects, differing only in how the signal was drawn as an image. Neither is tracking anything subject-specific. The classical arm agrees more with the scalogram CNN (+0.284) than the two CNNs agree with each other, which is consistent with both picking up the same weak non-diagnostic property (recording quality, arousal, artifact level) rather than anything about ADHD.
 
-**The fold spread is the most reportable thing here.** Topomap, per fold:
+**The classical arm is closed on principled grounds**, not exhaustion: the last distinct feature family was added, measured, and contributed less than the measures it competed against. Three method families, six measurements, three paired tests, one conclusion.
 
-```
-fold_0  AUC 0.833      fold_1  AUC 0.347
-fold_2  AUC 0.750      fold_3  AUC 0.365
-                       fold_4  AUC 0.375
-```
+**Also built: `frontend/index.html`.** Single-file dashboard against the existing `/predict` endpoint, no build step. Its design problem was unusual — the interface has to make a null result legible rather than flatter a model. The hero is a measurement scale: the prediction placed on a 0–1 ruler with the model's measured 95% CI (0.397–0.641) shaded, so a prediction landing inside the band is visibly inside the range where it carries no information. A dashboard announcing "ADHD — 87% confident" from a chance-level model would be the genuinely indefensible artefact. Includes a worked-example mode using stored real values for C09090107, so the interface demonstrates without a backend or a trained checkpoint.
 
-Fold-mean 0.534, pooled 0.523. **Five folds of ~17 subjects produced AUCs from 0.35 to 0.83 when the true value is near chance.** Reporting `fold_0` alone would have given "AUC 0.833, comparable to published work" — and a single train/test split on this cohort would have produced exactly that. This is a concrete, measured illustration of why small-n EEG results are unstable, generated on our own data rather than cited.
+**Decision: stop measuring.** Six measurements, three method families, all CIs containing 0.5, and the top features are arousal and artifact. A seventh measurement adds a row to a table that already says the same thing six times.
 
-**Prediction distributions confirm it.** Topomap: ADHD mean probability 0.498, Control 0.491, difference **+0.007**. Scalogram: 0.499 vs 0.488, difference +0.011, with 38 of 84 predictions falling within 0.05 of the decision threshold. The classes are superimposed. The model is not confidently wrong — it has no opinion. Threshold tuning cannot help: even choosing the cutoff with knowledge of the labels moves scalogram accuracy from 0.548 to 0.548.
-
-**Recovered rather than re-run.** A fourth Colab session was recycled after the topomap loop finished all five folds but before `run_cv` returned. The per-fold backup added on 2026-09-05 had saved every fold's `weights/best.pt`, but `fold_metrics` and `oof_frames` live in memory until the loop ends — so all five trained models survived and every subject-level number was lost. Wrote `training/recover_fold_metrics.py`, which reloads each `best.pt` and re-scores its outer fold. Minutes instead of three hours.
-
-It records `inner_val_fold` as `"unknown (recovered run)"` rather than reconstructing it from the rotation rule — that would be an assumption dressed as data. It also refuses to run if the run directories do not match `<representation>_<fold>`, since it identifies the outer fold from the directory name and guessing would silently produce in-sample numbers.
-
-**A gap this exposed:** `run_cv` writes its summary CSVs only after the loop. Both should be written incrementally inside it, so a crash at fold 5 costs the last fold's metrics rather than all five. The recovery script makes that survivable; writing them per fold would make it unnecessary.
-
-**What this establishes.** On 84 subjects, `yolov8n-cls` on EEG-derived images — scalograms or topomaps, fine-tuned end to end or with a frozen backbone — does not discriminate ADHD from Control. Four estimates, two representations, two capacity settings, all within 0.50–0.55.
-
-**What it does not.** That EEG carries no signal, that a different architecture would fail, or that the result would hold at n=500. It is a bounded negative result about a specific approach at a specific sample size, and it is better evidenced than most positive results in this literature — because the memorisation curve, the fold spread, the balanced classes and the permutation tests all say the same thing.
-
-**Remaining untested:** the classical baseline on the expanded feature set, and the fusion classifier, which has still never run on real out-of-fold probabilities. Both need no GPU. The classical baseline is now the highest-value work left — not because it is likely to succeed, but because it is the only route to a statistically valid comparison against the 75.8% figure, and a paired test showing two methods are *equivalently* poor is itself reportable.
-
-- **Next:** (1) `classical_baseline.py` — SVM on engineered features, same folds, same three-way split, output shaped to join the OOF tables; (2) `paired_comparison.py` — McNemar plus paired bootstrap; (3) fusion on real OOF probabilities; (4) write `run_cv`'s summary CSVs incrementally.
+- **Next:** (1) fusion once, for completeness — expect ~0.53, the kappa values say the arms are wrong about different subjects but none carries signal to combine; (2) email the dataset author about VCPT trigger coding, the one thing that could still change the picture since Rohani's 826 features included P300 and behavioural measures; (3) write the methods draft from this log.
