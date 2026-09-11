@@ -1,139 +1,114 @@
-# ADHD-YOLO
+# Progress log
 
-YOLO-based image classification framework for pediatric ADHD screening from EEG/ERP signals — converted to 2D scalograms, topographic heatmaps, and EC/EO coherence maps, classified with `yolov8n-cls`, explained with Grad-CAM, and fused with classical EEG biomarkers via a logistic-regression meta-classifier. Built as both a research project (thesis-grade methodology) and an engineering portfolio piece (FastAPI backend, Docker, AWS deployment).
+Update this at the end of every working session — a few lines is enough. This is what lets a new chat pick up exactly where you left off.
 
-Full methodology, decisions, and roadmap: see `PROJECT.md` (its §6a indexes the §6X work IDs used throughout the log). Session-by-session log: see `PROGRESS.md`. This file is the high-level orientation — what the project is, where it stands, and what's next. A `docs/STUDY_GUIDE.md` covering the background science — EEG, spectral analysis, the ADHD biomarker literature, evaluation methodology — is referenced in places but **has not been written yet**.
+## Format
+YYYY-MM-DD
+What was done
+What broke / what you learned
+Next step
 
-> **`PROJECT.md` section 6 uses identifiers that were never defined.** The methodology document itself is intact (recovered in `93cfcc5`) — the earlier "truncated copy of PROGRESS.md" warning no longer applies. What is still missing is the lettered work-item list: `PROGRESS.md` cites §6H, §6J, §6M, §6N, §6O, §6P, §6Q, §6R and §6T as its canonical work IDs, and none of them had a definition anywhere in the repo. `PROJECT.md` §6a now carries a table reconstructed from how each ID is used in the log — accurate to the work, but not recovered from the original wording.
-
----
-
-## What this project actually does
-
-Takes raw EEG recordings from children (resting-state eyes-open/eyes-closed, plus a Go/NoGo attention task), converts the 1D signal into 2D image representations (scalograms, topomaps, EC/EO coherence maps), and classifies ADHD vs. Control three ways: a `yolov8n-cls` image classifier alone, classical hand-engineered biomarkers alone, and a fusion of both via a meta-classifier — reported side by side. The CNN's reasoning is made visible via Grad-CAM and checked against known ADHD-relevant electrode sites for clinical plausibility.
-
-**This is a decision-support research tool, not a diagnostic device.** That framing is deliberate and stated everywhere in the project.
-
-## Why YOLO, and why classification instead of detection
-
-The original idea was YOLO *object detection* — drawing bounding boxes around EEG anomalies like theta bursts or P300 latency drops. That was dropped early: those boxes would have to be generated from the same threshold rules (TBR > 3.0, P300 > 380ms) the project's own biomarker engine already uses, which means the detector would just be re-learning a rule that was already written down — no independent signal, and a guaranteed first question from any reviewer. Classification (`yolov8n-cls`) + Grad-CAM for localization avoids that circularity entirely while keeping the same "is this novel" angle: YOLO-on-spectrograms exists in other domains (confirmed against sleep-apnea EEG literature) but not, as far as we found, for pediatric ADHD specifically.
-
-## The baseline we're measuring against
-
-Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accuracy** with an SVM on 113 hand-selected features (from 826 originally extracted), and a **feature-selection + Logistic Regression combination hit 84.5%** in their own results table, though it was excluded from their headline result for clinical-interpretability reasons, not accuracy. Both numbers are real targets here.
-
-**Note the feature count: 113, not 3.** The project's working assumption has been that the classical-biomarker + fusion path is the highest-leverage route to beating them. As of 2026-08-23 that path is carrying only three real features (TBR per condition), and those three do not separate the groups (see below). The assumption isn't refuted, but it now depends on expanding the feature set rather than on TBR alone.
 
 ---
 
-## Current status
+### 2026-08-12
+- Project scoped and PROJECT.md written: classification-only + Grad-CAM (no bounding-box detection), subject-wise CV, transfer learning plan, biomarker fusion layer, PRISMA lit review plan.
+- Decisions locked: local dev with Docker from day one, classification over detection.
+- Repo skeleton created (this commit).
+- **Next:** get raw dataset from IEEE DataPort / your copy, confirm file format (.edf/.mat/.csv), start `data_pipeline/preprocessing.py` on a handful of subjects.
 
-| Phase | Status |
-|---|---|
-| 0 — Setup (repo, GitHub, Jira, Docker) | ✅ Done |
-| 1 — Data pipeline | 🟡 **Built, found compromised, cause fixed — regeneration pending.** 108 subjects, ~122,000 images. ICA was removing genuine occipital alpha (median retention 0.643); a topography veto restores it to **1.000**. The existing images still come from the old behaviour and must be regenerated |
-| 2 — Baseline model + classical features + fusion | 🟡 **First unbiased CNN result: AUC 0.503 — chance.** §6R fixed and verified. The scalogram arm, fine-tuned end-to-end, does not generalise. Untested: frozen backbone, topomap arm, classical baseline, fusion |
-| 3 — Grad-CAM + clinical-plausibility check | 🟡 Code written and internally tested; blocked on Phase 2's real trained model |
-| 4 — Literature review + paper writing | ⬜ Not started |
-| 5 — Backend, dashboard, AWS deployment | 🟡 `/predict` built and tested; **dashboard built** (`frontend/index.html`, single file, no build step). AWS deployment not started |
+### 2026-08-1x (backfilled — Phase 1 preprocessing + image conversion)
+- `data_pipeline/preprocessing.py` and `data_pipeline/image_conversion.py` built and run end-to-end on real subject files (one ADHD, one Control, all three recording types: EC/EO resting, Go/NoGo VCPT) — not synthetic test data.
+- Real problems found by inspecting actual files/output, not by assuming the code worked:
+  1. Raw files carry no channel position data — broke topomap plotting. Fixed by attaching a standard 10-20 montage on load.
+  2. EOEC files have zero event markers — no metadata way to locate the EC/EO boundary. Solved via the alpha-blocking effect (occipital alpha power ~2-19x higher eyes-closed, confirmed on 5 real subjects); ambiguous-ratio subjects are flagged for manual QC rather than trusted silently.
+  3. VCPT LABEL channel doesn't encode the paper's 4 trial conditions — pulse count varies 100-175/subject with continuous pulse width, consistent with a behavioral response marker, not a stimulus code. True P300 latency/amplitude and per-condition behavioral features are **not currently recoverable**. No companion marker file or metadata.csv found. Fallback: fixed-window epoching (doesn't need condition labels) + an approximate behavioral-proxy summary stat, both flagged as approximations in code and in PROJECT.md limitations. **Still pending: confirmation from the dataset's corresponding author.**
+  4. Scalogram images came out visually flat — EEG's 1/f trend (theta ~20x beta) let a single global color scale drown out everything but the dominant band. Fixed with per-frequency-row normalization.
+  5. Topomap heads came out as stretched ovals — pre-resize canvas wasn't square. Fixed by keeping the composite figure square before the final resize.
+  6. One float-rounding edge case in the EC/EO crop boundary that would have crashed on the full 103-subject batch — caught by testing on real files, not by code review alone.
+- **Next:** subject-wise train/val/test split, before generating images at scale (epochs from the same child must not leak across train/test).
 
-**Full dataset located, discovered and processed** (`D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files). The 109-vs-103 count resolved to **108 usable subjects** (52 ADHD / 56 Control), with `C11121140` excluded for a malformed filename. The cohort still exceeds the paper's 103 (49/54) by five subjects, unexplained and with no demographics file shipped; results are reported on 108 with the deviation stated, noting the 75.8%/84.5% baseline was computed on 103.
+### 2026-08-16
+- Built and tested `data_pipeline/subject_split.py`: stratified subject-level holdout test set + stratified 5-fold CV over the rest, writing one manifest CSV (`subject_id, group, split, eoec_path, vcpt_path`) that downstream scripts read from instead of re-deriving splits.
+  - Tested: dry-run on synthetic subjects (49 ADHD / 54 Control, matching the real cohort balance); real-filename discovery against mixed-case `.edf`/`.EDF` files with/without a matching VCPT file; duplicate `subject_id` and too-few-subjects-for-n_folds both raise instead of silently producing a bad split; manifest round-trips through CSV; unknown-subject lookup raises `KeyError`.
+- **Bug found in `image_conversion.py`:** its own docstring documented the output layout as `output_dir/<representation>/<split>/<class>/<filename>.png`, but `process_epochs_to_images()` never actually wrote a `<split>` folder — every image landed in `output_dir/<representation>/<class>/...` regardless of train/val/test/fold. (Not a surprise — `subject_split.py` didn't exist yet when this was written, so there was nothing to wire it to.)
+  - Fixed: `process_epochs_to_images()` now takes a required `split` argument and uses it in the path. Added `process_subject_from_manifest()`, which looks up a subject's `split` and `group` directly from the `subject_split.py` manifest, so callers can't hand-type the wrong split and silently reintroduce leakage.
+  - Verified end-to-end with synthetic EEG → epochs → manifest lookup → saved PNGs: confirmed on disk as `scalogram/fold_2/ADHD/...` and `topomap/fold_2/ADHD/...`; visually checked both image types render correctly (5 distinct scalogram rows, round topomap heads, not stretched).
+- **Next:** run the full pipeline (preprocessing → split → image_conversion) on all 103 subjects once the complete raw dataset is available locally. Then Phase 2: `yolov8n-cls` baseline + classical TBR/biomarker replication + fusion meta-classifier, subject-wise 5-fold CV, report accuracy/sensitivity/specificity/AUC with significance tests against 75.8% and 84.5%.
 
-**Subject ages were recovered from the ID encoding.** IDs decompose as `[C|F]YYMMDDNN` — birth date plus serial — and the recording date is in the filename, so age is derivable despite the missing demographics file. All 108 parse and every age falls in 6.1–11.1 years. **Groups are age-matched: ADHD 8.29 ± 1.22 y, Control 8.43 ± 1.04 y, Mann-Whitney p = 0.50.** This matters: slow-wave power falls and alpha peak frequency rises with age, so an age difference would have made "elevated theta in ADHD" partly "younger children". Ages are *derived* from an inferred scheme, not read from a file — stated as such in the methods.
+### 2026-08-16 (cont'd) — batch pipeline driver
+- Built `data_pipeline/build_dataset.py`: the missing piece that actually runs preprocessing → subject_split manifest lookup → image_conversion across a whole cohort in one command, instead of each module only working in isolation.
+  - Reads an existing manifest, never regenerates one (regenerating on every batch run would silently reshuffle folds and invalidate anything already computed against the old split).
+  - Respects the "ambiguous EC/EO split → don't silently trust it" rule already stated in `preprocessing.py`: ambiguous subjects are skipped by default and logged with their `alpha_ratio`, not force-processed. `--include-ambiguous` overrides per-run, `--subjects <id>` re-runs a specific subset.
+  - One subject failing doesn't crash the batch — every subject wrapped in try/except, real exception text logged to `build_log.csv`, not swallowed.
+- Tested against real synthetic `.edf` files on disk (not just in-memory objects) covering: a clean subject with a VCPT file, a clean subject without one, a genuinely ambiguous subject (alpha_ratio ≈ 1.01, confirmed flagged and skipped), an unknown subject_id (confirmed logged as failed, batch continued), and the `--include-ambiguous` override (confirmed it forces processing when asked). Verified output images land under the correct `<representation>/<split>/<label>/` path.
+- **Gotcha found and documented:** `subject_split.py` and `build_dataset.py` both do package-relative imports (`from data_pipeline import ...`), so they must be run as `python3 -m data_pipeline.<script>` from the repo root — `python3 data_pipeline/<script>.py` breaks with `ModuleNotFoundError: No module named 'data_pipeline'` as soon as they import each other. Worth remembering before running this on the real 103-subject batch.
+- **Next:** once the real dataset is available, run `subject_split.py` for the real manifest, then `build_dataset.py` on all 103 subjects. Review anyone flagged `skipped_ambiguous` manually before deciding whether to re-run them with `--include-ambiguous`.
 
-**Test split is 14 of 17 usable.** Fourteen subjects were skipped by the EC/EO ambiguity rule, four of them in the test split; five were recovered using validated changepoint boundaries (see below). At n=14 the 95% CI on accuracy is roughly ±24 points, which constrains what the final result can claim.
+### 2026-08-17
+- Verified the uploaded repo state end-to-end: ran `subject_split.py` and `build_dataset.py` for real against all 5 sample subjects (not synthetic) — 5/5 processed clean, correct fold/class folder structure, VCPT-less subjects handled correctly.
+- Built `training/train_yolo_cls.py` — subject-wise CV training driver for `yolov8n-cls`. Key design point: images are per-epoch but 75.8%/84.5% are per-subject accuracy, so evaluation aggregates epoch-level predictions back to one prediction per subject (mean probability) before computing metrics — implemented in `aggregate_to_subject_level()`, not left as a manual step.
+- Found and fixed a real bug via testing, not code review: the fold-assembly step prefixed symlinked filenames with the fold name for traceability, which broke the subject-ID parser and made the leakage-check flag every subject as leaking (a false positive that would have blocked all training). Fixed by dropping the unnecessary prefix — filenames are already unique across folds since each subject belongs to exactly one fold.
+- Verified the leakage check works both ways: confirmed it passes clean on a correct fold assembly, and confirmed it correctly catches a deliberately-injected real leak (same subject's file symlinked into both train and val).
+- Ran one real (if statistically meaningless — 1 epoch, ~10 images, one fold with a single subject) end-to-end training pass against real generated images: confirmed the full chain (YOLO pretrained weights load → train → predict → aggregate → metrics → CSV) runs without crashing. Fixed one cosmetic bug (Ultralytics nesting output under its own default `runs/classify/` instead of the given path) by resolving to an absolute path.
+- **Next:** once the full 103-subject dataset and a GPU-backed machine are available, run `subject_split.py` for the real manifest (5-fold default), `build_dataset.py` on all subjects, then `train_yolo_cls.py` for a real Phase 2 baseline result — this is the make-or-break checkpoint per PROJECT.md.
 
-> 🟡 **ICA was removing occipital alpha. Fixed — but the existing images predate the fix.**
->
-> An audit of all 108 subjects found ICA removing genuine occipital alpha: **median retention 0.643**, 68/108 subjects losing >25%, 34/108 losing >50% (worst 0.02×). Alpha blocking is among the most robust effects in electrophysiology, so losing a third of it is preprocessing damage, not variation.
->
-> The mechanism was **not** occipital-dominant components — only 9 of 313 (2.9%) were. It was that `find_bads_eog` and `find_bads_muscle` judge components on *spectral* criteria alone, so spatially diffuse components got removed, and removing a diffuse component subtracts signal from every channel proportionally. Measured by peak region, an `eog` component peaks frontopolar only 58% of the time and a `muscle` component peaks temporal only 37% — **48% overall.** Both detectors are wrong more often than right.
->
-> **The fix is a topography veto** — a spatial sanity check on a spectral detector, the same shape as the physical plausibility check the EC/EO changepoint detector needed. A component is excluded only if it peaks in the region its detection reason implies *and* is focal there (focality > 2.0). Validated on 20 subjects: median alpha retention **0.643 → 1.000**, range 0.977–1.015, and the components still removed now match the reference profile for genuine ocular artifact (occipital 0.259, frontal 3.379 against a reference 0.09 / 4.05).
->
-> **The ~122k existing images still come from the old behaviour and must be regenerated**, bundled with per-channel epoch interpolation. One 5-hour run.
->
-> The loss was **not differential between groups** (ADHD 0.629, Control 0.651, p = 0.68), so preprocessing was not manufacturing a between-group difference. Worth re-confirming post-veto on the full cohort before regenerating.
+### 2026-08-1x (backfilled — EC/EO coherence representation)
+- Extended `data_pipeline/image_conversion.py` with a third image representation: EC/EO functional connectivity (coherence) maps, per PROJECT.md sec 4 step 3 — the source paper specifically flags coherence as one of its five retained feature groups.
+  - Design point: unlike scalogram/topomap, this is computed once per subject per condition (EC or EO) across the whole `Epochs` object, not per individual epoch — coherence needs averaging across many trials for a stable estimate.
+  - **Real problem found:** plain coherence (`'coh'`) came back saturated at 0.98–0.999 across every channel pair regardless of scalp distance, with almost no variance between bands. Confirmed this is volume conduction / common-reference inflation (a known EEG artifact), not real connectivity — ruled out small-sample bias by testing with longer epochs too. Fixed by switching to imaginary coherence (`'imcoh'`), which removes the zero-lag component and shows genuine variation across channel pairs.
+  - **Second bug found:** the LABEL channel was being silently included as a 20th "channel" in the coherence calculation before an explicit `.pick(CHANNELS_19)` was added to exclude it.
+  - `image_conversion.py` now imports `CHANNELS_19` directly from `preprocessing.py` instead of redefining the channel list, so the two modules can't drift out of sync about which channels are real EEG.
+- Updated `backend/requirements.txt`: added `mne-connectivity` (coherence computation) and `xgboost` (planned for the fusion meta-classifier in Phase 2).
+- **Next:** re-run `build_dataset.py` on the 5 sample subjects to confirm the new coherence images generate correctly end-to-end alongside the existing scalogram/topomap outputs, before scaling to the full cohort.
 
-### What's built
+### 2026-08-1x (backfilled — interpretability scaffold)
+- Built `interpretability/gradcam.py`: Grad-CAM for the trained `yolov8n-cls` model. Hooks into `model.model.model[8]` — confirmed by inspecting the real loaded model architecture (not assumed from documentation) — the final C2f block, immediately before the Classify head at index `[9]`.
+  - Confirmed by inspecting real model output that the forward pass returns a `(probs, logits)` tuple, not a plain tensor. Backprop is done on the raw logit rather than the softmaxed probability, since backpropping through softmax risks flattened gradients once a class is already confident — verified `probs[i] == softmax(logits)[i]` on real output before relying on this.
+- Built `interpretability/clinical_plausibility.py`: checks whether Grad-CAM attention concentrates on the electrode sites known to matter for ADHD (frontal Fz/F3/F4 for theta/beta, central-parietal Cz/Pz for P300), per PROJECT.md sec 4 step 7. Designed as a sanity check that reports a real finding either way, not a metric to force-pass.
+  - **Bug found in testing:** with the current 5 scalogram channels (Fz, Cz, Pz, F3, F4), every channel is already either "frontal" or "central-parietal," so the "other channels" comparison group is always empty. Comparing against an empty group's mean (`NaN`) is always `False` in Python, which silently made the plausibility flag always `False` regardless of the actual attention pattern. Caught by testing with a synthetic heatmap that should have passed and didn't — not caught by code review alone.
+- Neither module has been run against a real trained model yet — both depend on `training/train_yolo_cls.py` producing real trained weights first, which is still blocked on the full dataset + GPU (see 2026-08-17 entry).
+- **Next:** once Phase 2's real training run produces a trained model, run Grad-CAM + the plausibility check against real test-set predictions for the first time.
 
-- **`data_pipeline/preprocessing.py`** — loads real `.edf` files, applies the paper's filter protocol (0.5–50 Hz bandpass, 45–55 Hz notch), splits resting-state recordings into eyes-closed/eyes-open via the alpha-blocking effect. *(ICA function present but currently a no-op — see below.)*
-- **`data_pipeline/image_conversion.py`** — CWT scalograms, topographic band-power heatmaps, EC/EO imaginary-coherence maps.
-- **`data_pipeline/subject_split.py`** — subject-level stratified holdout test set + stratified 5-fold CV, writing one manifest CSV every downstream script reads from, so train/test leakage is structurally prevented rather than relying on discipline.
-- **`data_pipeline/build_dataset.py`** — batch driver with per-subject error handling and an audit log.
-- **`training/classical_features.py`** — theta/beta ratio at frontal channels, separately for EC/EO/VCPT. P300 and behavioral fields explicitly `NaN`, not fabricated.
-- **`data_pipeline/build_classical_features.py`** — batch driver, one CSV row per subject.
-- **`training/train_yolo_cls.py`** — subject-wise CV training driver. Aggregates epoch-level predictions to one prediction per subject before computing metrics, since the baselines being compared against are subject-level numbers.
-- **`training/fusion_classifier.py`** — merges the CNN's subject-level probability with classical features into a logistic-regression meta-classifier.
-- **`training/significance_test.py`** — bootstrap CI on subject-level accuracy vs. the 75.8%/84.5% baselines.
-- **`training/verify_tbr.py`** — read-only diagnostic comparing four TBR computation variants for both magnitude and group separation. Changes no pipeline code.
-- **`interpretability/gradcam.py`**, **`interpretability/clinical_plausibility.py`** — Grad-CAM hooked into the inspected `yolov8n-cls` architecture, plus an attention-vs-known-ADHD-sites sanity check.
+### 2026-08-19 — Phase 2: classical TBR features + fusion meta-classifier
+- Verified previous upload matches exactly (only trailing-newline/cosmetic diffs) — synced the cleaner `image_conversion.py` version from the upload back into the working copy.
+- Built `data_pipeline/classical_features.py`: TBR (theta/beta ratio) at frontal channels (F3/F4/Fz), matching the paper's formula, computed separately for EC/EO/VCPT (matching Table 1's "EC/EO/VCPT" feature-group structure rather than collapsing to one number). P300/behavioral fields present but explicitly NaN — not fabricated — pending the trigger-coding confirmation still outstanding.
+  - Tested on real ADHD and Control subjects: TBR shows a real, consistent, discriminative pattern (ADHD higher than Control across every condition) — the correct hypothesized direction, though absolute magnitude (9-16) is higher than typical published ranges (1.5-3.5) and worth validating further once more subjects are available. Not a code bug found on inspection — formula is a straightforward theta/beta PSD ratio — but flagged rather than presented as validated.
+- Built `data_pipeline/build_classical_features.py`: batch driver mirroring `build_dataset.py`'s manifest-driven, per-subject-error-handled structure.
+  - **Bug found and fixed:** pandas stores a missing `vcpt_path` as float `NaN`, not `None` — and `NaN` is truthy in Python, so `row.get("vcpt_path") or None` silently passed `NaN` through as if it were a real file path, crashing 2/5 subjects with a cryptic path-type error. Fixed with an explicit `pd.notna()` check.
+- Built `training/fusion_classifier.py`: merges CNN subject-level probability with classical TBR features into a logistic regression, reusing the same subject-wise CV folds and `compute_metrics()` as `train_yolo_cls.py` so results land in the same comparison table. All-NaN feature columns (currently P300/behavioral) are dropped automatically rather than imputed as noise; once those become available, they're included with no code change needed.
+  - **Bug found and fixed:** `classical_features.csv` already carries a `split` column (from `build_classical_features_table`); re-merging the manifest's `split` in `run_fusion_cv` created a `split_x`/`split_y` collision instead of a usable `split` column, crashing with `KeyError: 'split'`. Fixed by removing the redundant merge.
+  - **Real edge case found and handled:** a training fold can end up with only one class present (hit this for real with the tiny 5-subject test sample) — `LogisticRegression` can't fit that. Should be rare-to-never with the real stratified 103-subject 5-fold split, but now skips that fold with a clear warning instead of crashing the whole CV run, matching `build_dataset.py`'s per-subject error philosophy.
+  - Verified end-to-end with real out-of-fold CNN predictions (collected properly across both toy folds, not just one) merged with real classical features — full chain runs, correctly skips the single-class fold, correctly evaluates the valid one.
+- **Next:** once the full 103-subject dataset is available, run all three pipelines for real (CNN alone via `train_yolo_cls.py`, classical alone is directly readable from `classical_features.csv`, fused via `fusion_classifier.py`) and report all three in the Phase 2 comparison table against 75.8%/84.5% — this is the actual make-or-break checkpoint PROJECT.md calls for. Phase 2 and Phase 3 are now both functionally complete pending that real run.
 
----
+### 2026-08-20 — significance testing vs. baselines + a real bug from the file reorg
+- Noticed `classical_features.py` was moved from `data_pipeline/` to `training/` in the last upload, but `data_pipeline/build_classical_features.py` still imported from the old path (`from data_pipeline.classical_features import ...`) — would have crashed with `ModuleNotFoundError` on next run. Fixed to `from training.classical_features import ...`.
+- Built `training/significance_test.py`: bootstrap confidence interval on subject-level accuracy, checked against 75.8%/84.5%. Not a McNemar's test — that needs the baseline's paired per-subject predictions on the same test set, which we don't have, only Rohani et al.'s reported aggregate accuracy. Bootstrap CI is the correct tool for comparing our accuracy against a fixed reference number.
+  - Tested on a realistic 20-subject case (85% accuracy): CI came back wide enough (70–100%) that it correctly does NOT claim significance over 75.8% — appropriately conservative rather than overclaiming.
+  - Tested the tiny-N edge case matching our current real sample size (3 subjects): CI degenerates to nearly [0,1] instead of falsely looking precise — confirms it won't produce a misleadingly narrow interval when there isn't enough data to support one.
+- **Next:** once Phase 2's real training run (full 103 subjects) produces subject-level results for CNN-alone, classical-alone, and fused, run `compare_to_baseline()` on all three against both 75.8% and 84.5% — these numbers, plus the CIs themselves (not just the significant/not-significant flag), go directly in the paper's results section.
 
-## Open correctness issues
+### 2026-08-21 — Phase 5: /predict endpoint
+- Built `backend/app/inference.py`: ties preprocessing → CNN prediction (averaged across EC/EO epochs) → Grad-CAM → TBR features into one function, kept separate from the FastAPI layer so it's testable directly.
+- Wired it into `backend/app/main.py` as `POST /predict`. Returns 503 with a clear message if no real trained model is configured, rather than silently using untrained weights.
+- **Bug found (same class as before):** copied the old `data_pipeline.classical_features` import path into the new file — fixed to `training.classical_features`.
+- **Bug found (new, more serious):** `NaN` isn't valid JSON. Since P300/behavioral biomarker fields are currently always `NaN`, this would have made **every single `/predict` request return a 500 error** — only surfaced by testing an actual HTTP request through FastAPI's `TestClient`, not by testing `run_inference()` as a plain Python function (where `NaN` floats are perfectly valid). Fixed by converting `NaN` → `None` (JSON `null`) before returning, which is also the more correct representation of "not available."
+- Verified full real request/response cycle: real EEG files, real (toy) trained checkpoint, through `TestClient` — 200 response, correct prediction/confidence/TBR/Grad-CAM/disclaimer fields, P300 fields correctly `null` not `nan`.
+- **Next:** cap epochs-per-request for response time (currently processes all 505 epochs in a real 12-minute file), then wire the fusion classifier in as an optional second prediction once Phase 2's real model exists.
 
-These were found by running code against real data, not by reading it. Items resolved since are listed under "Real problems found and solved" below rather than deleted, so the record of what broke stays intact.
+### 2026-08-23 — TBR units bug confirmed; TBR fails to separate groups at n=20; full dataset located
 
-1. **All generated images and classical features are stale.** They were produced before artifact rejection existed, and must be regenerated. Epoch counts per subject will drop by differing amounts, so the condition balance needs re-measuring too.
-2. **No QC policy for problem subjects.** The pipeline now warns above 30% epoch rejection and flags subjects where ICA component removal hits the cap, but there's no rule for whether to include, exclude, or flag them. **F09080101 specifically needs manual inspection** — muscle detection flags 14 of its 19 components at MNE's default threshold, meaning its decomposition is dominated by high-frequency structure. Needs deciding before Phase 2.
-3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
-4. **CV accuracy will be optimistically biased (§6R).** Ultralytics selects `best.pt` by accuracy on the val fold, and evaluation then scores on that same fold. `evaluate_on_test()` already avoids this for the final model via an inner validation fold; the CV loop itself still needs the same treatment.
+Session goal was narrow: test whether the unexplained TBR magnitude (9-16 vs published 1.5-3.5, flagged on 2026-08-19) was a units bug. It was. But testing it on 20 subjects instead of 5 overturned a bigger claim.
 
-## Real problems found and solved
+**Built `training/verify_tbr.py`** — a read-only diagnostic that computes TBR four ways side by side (`.mean()` vs `np.trapezoid` band power × `nperseg` 256 vs 1000) and reports both magnitude and group separation. Changes no pipeline code; reuses `preprocessing.py`'s real functions so numbers are directly comparable to what the pipeline produces. Skips ICA deliberately (see below).
 
-1. **No channel position data in the raw files** — broke topomap plotting. Fixed by attaching a standard 10-20 montage on load.
-2. **EOEC files have zero event markers.** Solved via the alpha-blocking effect instead of an external timing file. Ambiguous-ratio subjects are flagged for manual QC, not silently trusted.
-3. **VCPT trigger channel doesn't encode trial conditions** — pulse count varies 100–175 across subjects with continuously-varying pulse width, consistent with a behavioral response marker, not the 4-condition stimulus code the paper describes. **True P300 latency/amplitude and per-condition behavioral features can't currently be recovered.** Pending confirmation from the dataset's corresponding author — outstanding since mid-August.
-4. **Scalogram images came out visually flat** — EEG's 1/f trend let one band dominate a global color scale. Fixed with per-frequency-row normalization. *(Caveat: this fix removes absolute band-power information from the images — see "Known limitations".)*
-5. **Topomap heads came out as stretched ovals** — pre-resize canvas wasn't square.
-6. **A float-rounding edge case** in the EC/EO crop boundary that would have crashed the full batch.
-7. **A false-positive bug in the leakage detector itself** — filename prefixing broke the subject-ID parser and would have flagged every subject as leaking. Found by testing the check with a deliberately-injected real leak.
-8. **Plain coherence saturated at 0.98–0.999 across every channel pair** — volume conduction, not real connectivity. Switched to imaginary coherence.
-9. **LABEL channel was silently riding along as a 20th "channel"** into the coherence calculation.
-10. **A NaN-comparison bug in the clinical-plausibility check** made its pass/fail flag always `False` regardless of the real attention pattern.
-11. **`NaN` is truthy in Python** — a missing `vcpt_path` is stored as float `NaN`, so `row.get(...) or None` passed it through as a fake path.
-12. **A column-collision bug in the fusion classifier** — re-merging `split` produced `split_x`/`split_y`.
-13. **A single-class CV fold** crashed logistic regression; now skipped with a warning.
-14. **`NaN` is not valid JSON** — would have made every `/predict` request return 500. Found via a real HTTP request through `TestClient`, not by calling the Python function directly.
-15. **Band power was computed as the mean of the PSD, not its integral** — inflating TBR by 4.88× on real subjects. Fixed with `np.trapezoid` (note: `np.trapz` was *removed* in NumPy 2.0, so the naive fix raises `AttributeError` on this environment).
-16. **Both artifact thresholds were guesses from literature, and both were wrong.** 150 µV peak-to-peak rejected 100% of epochs; measuring the actual post-ICA distribution showed the bulk ends near 170 µV with real artifact past 500, so 250 µV is the defensible choice. MNE's default muscle-detection threshold (0.5) removed 14 of 19 ICA components on one subject. Fixed by measuring rather than re-guessing (`training/sweep_muscle_threshold.py`).
-17. **`remove_artifacts_ica()` was a no-op** — `ica.apply()` with an empty exclude list reconstructs the signal bit-identically, so a full ICA fit per recording changed nothing. Combined with a missing `reject` parameter in epoching, the pipeline had *zero* artifact rejection. Fixed with EOG detection (Fp1/Fp2 proxies), muscle detection, and peak-to-peak epoch rejection.
-18. **`parse_filename`'s regex matched zero real files** — it required underscores in the date/time; the dataset uses dots. Would have raised on the first file of the 103-subject run. The docstring documented the wrong convention, which is how it survived. Fixed to accept `[._-]`.
-19. **`run_cv()` computed out-of-fold probabilities and threw them away** — `fusion_classifier.run_fusion_cv()` required exactly those as input, so the CNN and fusion halves of Phase 2 had no connecting code path at all. Fixed with `collect_oof_predictions()`, written per-representation because the CNN probability differs between the scalogram and topomap models and fusing against the wrong file would mismatch silently rather than error.
-20. **The held-out test split had no consumer.** `subject_split.py` had carved out a stratified test set since 2026-08-16; `run_cv()` only ever filtered it out. Fixed with `evaluate_on_test()`. The trap it had to avoid: Ultralytics picks `best.pt` by accuracy on whatever it gets as `val`, so passing it the test split would be selection-on-test — the final model takes an inner validation fold from dev instead, and the function raises if asked to use `test` for it.
-21. **Case-insensitive globbing produced a duplicate for every subject.** `discover_subjects` globbed both `.edf` and `.EDF`; on Windows both match the same files, tripping the duplicate-ID guard and blocking the cohort run for four sessions. Fixed by deduping on `os.path.normcase(os.path.abspath(path))`.
-22. **The `LABEL` channel rejected 100% of epochs on 100% of subjects.** These files carry a digital marker channel that is constant by construction, MNE types it as `eeg`, and `flat` drops an epoch if *any* eeg channel falls below threshold — so `epoch_signal` produced empty `Epochs` for every recording and the pipeline could not generate a single image. Latent until `build_dataset.py` was first run against the real cohort. The warning blamed the 250 µV peak-to-peak threshold, which sent the first investigation after the threshold value; measuring showed 250 µV was keeping 57–92% of epochs, not none. Same channel as #9, one function upstream, where it was fatal rather than merely wrong. Fixed by restricting epoching to the 19 real EEG channels, as `filter_raw` and the ICA already did; the warning now names the channels actually responsible.
+**CONFIRMED — the TBR magnitude anomaly is a units bug.**
+- `classical_features.compute_tbr()` takes `.mean()` of the PSD across each band. That is average spectral *density*, not band *power*. Published TBR uses the integral. Theta spans 4 Hz, beta spans 18 Hz, so the ratio is inflated by ~18/4 = 4.5x.
+- **Measured inflation on 20 real subjects: 4.88x** (predicted ~4.5x).
+- Group means under the corrected method land inside the published range: EC 2.66 (ADHD) / 2.87 (Control), EO 1.92 / 1.95, VCPT 2.48 / 2.41. The 9-16 anomaly is fully explained. No data problem.
 
-23. **The EC/EO midpoint split was an unchecked assumption.** `split_eoec_by_alpha` always used `half = n // 2`. A changepoint detector validated post-ICA on all 108 subjects found the trusted-only median boundary at **0.537, not 0.500** (Wilcoxon p < 0.00001) — so the midpoint misplaces ~18 s of an 8-minute recording, and the bias runs one way: EO is contaminated with eyes-closed data, never the reverse. Real but small, and the detector validates for only 64/108, so it was **not** applied wholesale. `split_eoec_by_alpha` now accepts an explicit `boundary_frac`; it is supplied only for subjects the midpoint rule flagged as ambiguous *and* whose boundary passes all three checks. Five such subjects were rebuilt, taking the test split from 13 to 14.
-24. **`build_log.csv` truncated instead of merging.** Safe for a full-cohort run, destructive for a partial one — a 5-subject `--subjects` rebuild wiped the record of the other 103. Images survived; provenance did not. The general rule this is an instance of: *any writer a partial run can touch must merge by default.* `--subjects` exists to make partial runs cheap, so a truncating writer behind it is a trap. Same shape as an earlier double-build collision.
-
-None of this was visible from reading the paper or the dataset README — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
-
-### Four diagnostics, each catching an error in the one before it
-
-Resolving the EC/EO question took four attempts, and the sequence is worth recording because three of the four *looked* conclusive:
-
-1. **A second vote from frontal ocular artifact — abandoned.** 72.2% agreement against a **base rate of 92.2%**: 20 points worse than always guessing EC-first, so it carried no information. The pass threshold had been compared against 50% instead of the base rate. Kept as a group-level finding (EC halves 150.2 µV vs EO 129.6 µV, Wilcoxon p < 0.0001) — a real mechanism, too noisy to classify individuals.
-2. **Changepoint detection, pre-ICA — not evidence.** Median boundary 0.564 with a 1.44× "gain" over the midpoint. But `best_score` is the maximum over every candidate by construction, so it beats the midpoint automatically: a synthetic series with *no* changepoint scored gain 1.46×.
-3. **Two real validation tests.** A permutation null on the time-shuffled alpha profile (real p = 0.000, no-boundary p = 0.350) and split-half agreement between O1 and O2 (real 0.000–0.033, noise 0.250–0.258). Both checked on synthetic data before being trusted. The obvious version of the split-half test — "is the ratio more extreme at the detected boundary" — passed on pure noise too.
-4. **Pre-checks that fired.** ICA moves the boundary, so the validation was re-run post-ICA to measure the signal the pipeline actually splits. And six "pinned" boundaries at `MIN_SEGMENT_FRAC` turned out to be *where the search stopped*, not where the transition was.
-
-**The finding that mattered most: a statistical test needs a physical sanity check on top of it.** Four subjects passed *every* statistical test — permutation p = 0.005, split-half difference 0.000 — with boundaries putting one condition at 47–70 seconds of an 8-minute recording. Adding a plausibility range of 0.25–0.75 as an AND (not a tiebreaker) rejected **19 subjects that passed both statistical tests**.
-
-The same shape recurred immediately afterwards in the ICA audit: a *spectral* detector (`find_bads_eog`, `find_bads_muscle`) needs a *spatial* sanity check on top of it. Both detectors flag components on frequency-domain criteria alone, and components with no focal topography — not eye movement, not muscle — satisfy those criteria and get removed. It is the same error in a different domain.
-
-Related: of four thresholds set in this project, the two taken from convention (150 µV peak-to-peak, MNE's muscle threshold of 0.5) were both wrong, and the two set from measured distributions were both right. **Copy conventions for physics; measure anything data-dependent.**
-
----
-
-## Findings on the classical biomarker (2026-08-23)
-
-Tested on **20 subjects (10 ADHD / 10 Control)**, not the 5 used previously.
-
-**The TBR magnitude anomaly was a units bug, and it's resolved.** Band power was being computed as the *mean* of the PSD across each band — average spectral density, not power. Theta spans 4 Hz and beta spans 18 Hz, so the ratio was inflated by ~4.5×. Measured inflation on real subjects: **4.88×**. Corrected group means land inside published ranges (EC 2.66/2.87, EO 1.92/1.95, VCPT 2.48/2.41 for ADHD/Control).
-
-**TBR does not separate ADHD from Control at this sample size.** Bootstrapped subject-level AUC:
+**OVERTURNED — TBR does not separate ADHD from Control.** This contradicts the 2026-08-19 entry's claim of "a real, consistent, discriminative pattern (ADHD higher than Control across every condition)" from 5 subjects. On 20 subjects (10/10), bootstrapped subject-level AUC:
 
 | Condition | AUC | 95% CI | Direction |
 |---|---|---|---|
@@ -141,23 +116,543 @@ Tested on **20 subjects (10 ADHD / 10 Control)**, not the 5 used previously.
 | EO | 0.490 | [0.24, 0.75] | none |
 | VCPT | 0.550 | [0.28, 0.80] | correct but negligible |
 
-All three CIs contain 0.5. **This overturns the earlier 5-subject observation** that TBR was "consistently higher for ADHD than Control across every condition" — that was noise, and it was reported as an encouraging signal in two prior documents. Correcting the units does not change separation (AUC moves 0.420 → 0.430 on EC), so the fix is about correctness and comparability to literature, not accuracy.
+All three CIs contain 0.5. The 5-subject signal was noise. Recorded here rather than quietly dropped, because it was written up as an encouraging finding in two prior documents.
 
-**This replicates the current scientific consensus.** A literature review (2026-08-24) found the negative result is well established, not an anomaly of this dataset:
+**The units fix does not change separation** — AUC moves 0.420 -> 0.430 (EC), 0.460 -> 0.450 (EO), 0.580 -> 0.550 (VCPT). It is a correctness fix, not an accuracy fix. Worth adopting so the number is defensible and comparable to literature, but it will not move the Phase 2 result.
 
-- **Arns, Conners & Kraemer (2013)** — meta-analysis of 9 studies (1253 ADHD / 517 non-ADHD). The group difference *shrank across publication years*, because TBR was rising in the **control** groups. Concluded TBR is not a reliable diagnostic measure.
-- **(2020, iSPOT-A/ICAN)** — five different spectral-analysis algorithms computed TBR across two multi-centre clinical datasets. They produced significantly different values, and **none distinguished ADHD from controls.** This is essentially the experiment `verify_tbr.py` runs, published on far more subjects.
-- **Arns et al. (2024)**, N=417 — "TBR has no diagnostic value for ADHD."
-- **(2026) eLife multiverse analysis**, N=1499+381 — identifies **individual alpha peak frequency and aperiodic neural activity** as the mechanisms that limit TBR's value.
-- **Coolidge et al. (2007)** — separating ADHD from *other* psychological disorders: sensitivity 50%, specificity 36%.
+**Implication for PROJECT.md 5a:** the premise that classical biomarkers + fusion are "the single highest-leverage item for accuracy on this dataset" currently rests on 3 features, and those 3 are at chance. The premise isn't dead — Rohani et al. reached 84.5% with 113 selected features, not 3 — but expanding the classical feature set is now the critical path for that claim, not an optional enhancement. TBR alone was never going to carry it.
 
-Caveats in both directions: n=20 is small and the CIs are wide, so this is *no evidence of separation* rather than *evidence of no separation*.
+**Other real problems found this session:**
 
-**What this means for the project.** The negative result is a finding with citations, not an absence of results — and it sharpens the comparison rather than weakening it. If the CNN succeeds where the classical marker fails, the interesting question becomes *what it is seeing*, which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. The literature also names two specific confounds that point directly at better features: **aperiodic exponent/offset** (a slope difference shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends) and **individual alpha peak frequency** (a child with IAF at 7-8 Hz has genuine alpha power inside the theta window). Both are computable from data already in hand.
+1. **`parse_filename`'s regex matched ZERO real files.** It required underscores in the date/time (`2019_09_08`); the actual dataset uses dots (`C09090107-2019.12.29-15.25.17-EOEC.edf`). `discover_subjects` would have raised `ValueError` on the first file of the 103-subject run. The docstring documented the wrong convention, which is how this survived. Fixed to accept `[._-]` as separator.
+2. **`nperseg=1000` is silently capped at 751 by the 1.5 s epoch length** — confirmed by the bin counts in the output (6 theta bins, not the 9 that 0.5 Hz resolution would give). Epoch length physically caps frequency resolution. TBR is a subject-level summary and has no reason to be computed on epochs at all; computing it on the continuous segment would give both better resolution and far more averaging, for free.
+3. **`remove_artifacts_ica()` is a no-op.** `ica.apply()` is called with an empty `exclude` list, which reconstructs the signal bit-identically. There is currently zero artifact rejection anywhere in the pipeline, and it costs a full ICA fit per recording (~206 fits on the full cohort) for no change in output.
+4. **5/20 subjects show EC < EO**, against the expected direction (theta/beta is higher eyes-closed). `F09081100, F09101156, F10011103, C10011101, C10020106`. These are candidates for a flipped EC/EO assignment. Suggests a cheap QC rule: TBR direction should agree with `alpha_ratio`, and disagreement flags a subject — stronger than the alpha ratio alone.
+5. **`PROJECT.md` does not contain the methodology document.** It is a 38-line truncated copy of PROGRESS.md ending mid-August. Every module in the repo cites "PROJECT.md sec 4 step 3", "sec 5a", "sec 6 Phase 2" — none of those sections exist in the file. Needs recovering from git history. **Blocking for the paper**, since it holds the locked design decisions and the limitations list.
+6. **Environment gotcha:** on this Windows box, `python` and `python3` both resolve to MSYS2's Python (`C:\msys64\ucrt64\bin\`), which has no packages. `pip` installs into `C:\Users\<user>\AppData\Local\Programs\Python\Python313\`. Use `py -m ...`, or set up a venv. Also note `where` in PowerShell is an alias for `Where-Object`, not `where.exe`.
 
-## First unbiased result: the CNN is at chance
+**FULL DATASET LOCATED** — `D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files. This was the single biggest blocker since 2026-08-17 and it is gone. Two things to resolve before the real run:
+- 109 files vs 103 subjects in the paper. `discover_subjects` raises on duplicate subject IDs, so it will halt. Need to determine whether these are genuine re-recorded sessions or the same files copied into both `edf (all)` and the `edf (just c)` / `edf (just f)` subfolders. **Check not yet run.**
+- `discover_subjects` globs both `*-EOEC.edf` and `*-EOEC.EDF`. Windows filesystems are case-insensitive, so both patterns likely match the same files, producing a duplicate for every subject and tripping the same guard. Needs `set()` dedup. **Prediction, not yet verified.**
 
-30 epochs, 5 folds, 84 development subjects, on a Colab T4:
+**Measured, not assumed — inputs for Phase 2 planning:**
+- VCPT accounts for **65% of all epoch-images** (VCPT ~870-920 epochs/subject vs EC/EO ~200-370 each). Training on all three conditions mixed means two thirds of the training signal is one condition.
+- Per-subject total epoch count varies 1275-1616 (1.27x). Milder than feared, but still argues for capping epochs per subject so recording length can't become a learnable feature.
+
+**Not changed this session** (deliberately — verify first, patch second): `classical_features.py` still uses `.mean()`. The patch is understood and small, but should land together with the move off epochs onto the continuous signal rather than as two separate edits.
+
+- **Next:** (1) run the duplicate-subject-ID check on the 109 files; (2) recover `PROJECT.md` from git history; (3) patch `classical_features.py` — trapz + continuous-signal PSD; (4) expand the classical feature set beyond TBR (relative band power per channel, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries) — now critical path, not optional; (5) resolve the ICA no-op before any real training run, since every image and every feature currently comes from unrejected data.
+
+
+### 2026-08-24 — TBR band power fixed to integral; literature review confirms the negative result
+
+Branch: `fix/tbr-band-power`. Implements the variant validated on 2026-08-23; adds no new hypothesis.
+
+**Changed `training/classical_features.py`:**
+- Added `_band_power()` — band power is now the INTEGRAL of the PSD across the band (`np.trapezoid`), not the mean. Returns NaN if a band holds fewer than 2 bins rather than silently returning a value derived from one sample.
+- `TBR_NPERSEG` 256 -> 1000 (clamped to epoch length, so 751 in practice). Frequency resolution 1.95 Hz -> 0.67 Hz; theta bins 2 -> 6.
+- Added a `np.trapezoid` shim. `np.trapz` was REMOVED in NumPy 2.0 and this environment runs NumPy 2.4, so the naive fix would have raised `AttributeError`.
+- Rewrote the module and function docstrings. The old module docstring asserted TBR was "the SINGLE HIGHEST-LEVERAGE item for accuracy" — contradicted by our own measurement. The old function docstring claimed TBR was computed "from the full recording's power spectrum (not per-epoch)", which was never true: it is computed from epoch PSDs averaged together, and the epoch length caps resolution.
+
+Verified: patched logic reproduces the `trapz/1000` column from `verify_tbr.py` exactly (6θ/27β bins on real data). Known-answer test on a flat spectrum returns theta=4.0, beta=18.0, ratio=0.2222 = 4/18, as it must.
+
+**Literature review — the negative TBR result is the current consensus, not an anomaly.** Searched properly for the first time; should have been done before treating a 5-subject signal as encouraging:
+
+- **Arns, Conners & Kraemer (2013)**, *J Atten Disord* 17(5):374-383 — meta-analysis, 9 studies, 1253 ADHD / 517 non-ADHD, TBR at Cz eyes-open. Grand-mean ES 0.75 (6-13y), 0.62 (6-18y), but significant heterogeneity means these are overestimates. The group difference **shrank across publication years because TBR rose in the CONTROL groups**. Conclusion: excessive TBR is not a reliable diagnostic measure; may have prognostic value in a subgroup.
+- **Arns et al. (2016)**, *JCPP* editorial — "How should child psychologists and psychiatrists interpret FDA device approval? Caveat emptor", written in response to the 2013 FDA clearance of the NEBA device.
+- **(2020)** *Appl Psychophysiol Biofeedback* — five different spectral-analysis algorithms applied to TBR across iSPOT-A and ICAN. The methods produced significantly different TBR values and **none distinguished ADHD from controls**. This is essentially our `verify_tbr.py` experiment, published, on far more subjects.
+- **Arns et al. (2024)**, *Appl Psychophysiol Biofeedback*, N=417 — subtyping meta-analysis. Grand-mean effect sizes -0.212 < d < 0.218, non-significant. "TBR has no diagnostic value for ADHD."
+- **(2026)** *eLife* multiverse analysis, N=1499 + 381 — varied every reasonable methodological choice. **Individual alpha peak frequency and aperiodic neural activity shape TBR estimates, limiting their value as a biomarker.**
+- **Coolidge et al. (2007)** — TBR separating ADHD from OTHER psychological disorders (the clinically real task): sensitivity 50%, specificity 36%.
+
+**Two named mechanisms, both actionable:**
+1. **Slow alpha contaminating theta.** Alpha peak frequency rises with age; a child with IAF at 7-8 Hz has genuine alpha power inside the 4-8 Hz theta window, inflating TBR with no excess theta. Fix: compute individual alpha peak frequency per subject, use it as a feature, and optionally define theta relative to each child's own alpha rather than fixed edges.
+2. **Aperiodic (1/f) activity.** A difference in spectral slope shifts every band-power measure, and TBR is maximally sensitive since theta and beta sit at opposite ends. Fix: fit `specparam`/FOOOF, use exponent and offset as features.
+
+**A confound now confirmed as live in this pipeline:** the literature specifically notes children with ADHD move more than controls, which biases spectral estimates. With ICA a no-op and no epoch rejection, this confound is fully active AND differential between our groups. This moves `fix/ica-artifact-rejection` up in priority — it is not cleanup, it is a named threat to validity.
+
+**Reframing for the paper:** the negative result is a finding with citations, not an absence of results. If the CNN succeeds where the classical marker fails, the interesting question becomes what it is seeing — which is exactly what Grad-CAM and `clinical_plausibility.py` are built to answer. This strengthens the thesis rather than weakening it.
+
+**Added `docs/STUDY_GUIDE.md`** — 12 modules covering EEG physiology, spectral analysis, the ADHD/TBR literature, preprocessing, wavelets, connectivity, image conversion, CNNs, evaluation methodology, small-sample statistics, and interpretability, with a 30-question self-test.
+
+**Still outstanding from the previous session, unchanged:** the duplicate-subject-ID check on the 109 EOEC files has still not been run, and `PROJECT.md` has still not been recovered from git history. Both block the full-cohort run.
+
+- **Next:** (1) run the duplicate-ID check; (2) recover `PROJECT.md`; (3) `fix/ica-artifact-rejection` — promoted above the augmentation and layout fixes now that the movement confound is confirmed relevant to this population; (4) TBR on the continuous segment rather than epochs; (5) expand the classical feature set, starting with aperiodic exponent and IAF since the literature names both as the specific mechanisms TBR misses.
+
+
+### 2026-08-24b — ICA no-op fixed; artifact rejection now actually exists
+
+Branch: `fix/ica-artifact-rejection`. Promoted above the augmentation and image-layout fixes: the movement confound named in the TBR literature (ADHD children move more than controls) means missing artifact rejection is differential between the groups, not random noise. That is a threat to validity, not cleanup.
+
+**`remove_artifacts_ica()` was a no-op.** It fit an ICA and then called `ica.apply()` with an empty `exclude` list, which reconstructs the signal bit-identically — a full ICA fit per recording (~206 across the cohort) for zero change in output. Every image and every feature produced before this commit came from unrejected data.
+
+**Now does three things it didn't:**
+- **EOG detection** via `find_bads_eog` using Fp1/Fp2 as proxies. No real EOG channel exists (X1/X2 confirmed dead). Blinks dominate the frontopolar channels so the correlation is driven by ocular activity, but these ARE real EEG channels, so some genuine frontopolar brain signal is removed with them. Acceptable because TBR is computed at F3/F4/Fz — **must be stated as a limitation in the methods section.**
+- **Muscle detection** via `find_bads_muscle`. Relevant specifically here: EMG contaminates 20 Hz and up, which is the beta band, the DENOMINATOR of TBR. Blinks contaminate delta/theta, the numerator. Artifact was hitting the primary biomarker from both directions.
+- **Fits on a 1 Hz high-passed copy**, applies the solution to the 0.5 Hz data. Low-frequency drift degrades ICA decomposition; standard MNE practice, not a deviation.
+
+**`epoch_signal()` had no rejection at all.** Added peak-to-peak rejection at 150 uV plus a flat-channel threshold. `reject_uv=None` restores the old behaviour for comparison. Also fixed `tmax`: was `epoch_length`, which yields one extra sample and a 1-sample overlap between consecutive epochs; now `epoch_length - 1/sfreq`.
+
+**Design decisions worth recording:**
+- Both functions **return diagnostics** rather than cleaning silently. A recording where half the components were rejected, or a third of epochs dropped, should surface — not quietly contribute fewer images. Consistent with the project's flag-don't-silently-trust norm from the EC/EO ambiguity handling.
+- Warnings fire at >30% rejection and at zero surviving epochs. Neither raises — one bad subject must not kill a 103-subject batch.
+- Detection failures are caught and warned, returning uncleaned data rather than propagating.
+- `preprocess_subject()` now threads `ica_eoec`, `ica_vcpt`, `reject_ec`, `reject_eo`, `reject_vcpt` into its result dict.
+- Chose a fixed 150 uV threshold over a per-recording percentile. A percentile guarantees dropping a fixed fraction regardless of quality — losing good data on clean recordings and keeping bad data on poor ones. A fixed threshold plus a reported rejection rate is honest and defensible.
+- `autoreject` was considered and deferred: it adds a dependency, is slow, and the simpler threshold is reportable in a methods section without further explanation. Revisit if rejection rates come out extreme.
+
+**Consequences to handle before the full run:**
+- **Every image and classical feature generated so far is now stale.** They came from unrejected data. Both must be regenerated after this lands.
+- Epoch counts per subject will drop, and by different amounts per subject. The VCPT-dominance figure (65% of all images) will shift and needs re-measuring.
+- Subjects with high rejection rates need a QC decision: include, exclude, or flag. No policy exists yet — needs one before Phase 2.
+- TBR values will change. The 2026-08-23 measurements (group means 1.9-2.9, AUC 0.43/0.49/0.55) were computed on unrejected data and must be re-run. If TBR separation changes materially once artifact is removed, that is itself a finding worth reporting — the literature specifically raises movement artifact as a source of biased TBR estimates.
+
+**Still outstanding, unchanged across three sessions:** the duplicate-subject-ID check on the 109 EOEC files, and recovering `PROJECT.md` from git history. Both block the full-cohort run and are one command each.
+
+- **Next:** (1) re-run the 20-subject TBR check on ARTIFACT-REJECTED data and compare against the 2026-08-23 numbers; (2) duplicate-ID check; (3) recover `PROJECT.md`; (4) `fix/yolo-augmentation-flags`; (5) `fix/topomap-grid-layout`.
+
+
+### 2026-08-24c — artifact rejection thresholds set from measured data, not convention
+
+Completes `fix/ica-artifact-rejection`. Both thresholds in the previous commit were guesses from literature; both were wrong, and measuring produced a finding.
+
+**REJECT_PEAK_TO_PEAK_V: 150 -> 250 uV.** 150 uV rejected 100% of epochs on C09090107. Measuring the actual distribution showed why:
+- Pre-ICA the worst-channel median was 260.7 uV against a pooled median of 142.3 — a 2x gap, i.e. driven by a subset of channels. Post-ICA that gap is gone (per-channel medians 33-103 uV, uniform), confirming it was blinks and that ICA removed them.
+- The highest post-ICA channels are O2 (103), O1 (91), Pz (85) — occipital/parietal. That is genuine eyes-closed alpha, not artifact.
+- Worst-channel p90 = 167 uV, p95 = 544 uV. A sharp discontinuity, so real artifact begins past ~500. 250 uV sits in that gap and keeps 92% of epochs.
+- **A 150 uV threshold would have been systematically biased**, preferentially rejecting high-alpha epochs — i.e. discarding the EC condition's dominant physiological feature. Worth remembering: a threshold that cuts into the bulk of a distribution rather than its tail is rejecting signal, not noise.
+
+**MUSCLE_THRESHOLD: 0.5 (MNE default) -> 0.9, plus a hard cap.** Built `training/sweep_muscle_threshold.py` to measure the parameter's effect rather than guess again. Swept 0.5-1.0 across 2 ADHD + 2 Control:
+
+| Subject | TBR_EC range | Swing | Components excluded @0.5 |
+|---|---|---|---|
+| F08080102 (ADHD) | 2.356 - 2.551 | 8.3% | 5 of 19 |
+| F09080101 (ADHD) | 0.517 - 2.126 | **311%** | **14 of 19** |
+| C09090107 (Control) | 1.176 - 1.314 | 11.8% | 7 of 19 |
+| C09091102 (Control) | 1.838 - 2.342 | 27.4% | 6 of 19 |
+
+Three findings from this:
+
+1. **The effect is not directionally consistent.** Removing more "muscle" RAISES TBR in three subjects and LOWERS it in one. So it is not cleanly stripping beta — it is a per-subject perturbation with no consistent sign.
+2. **F09080101 is a broken recording, not a threshold problem.** 14 of 19 components flagged as muscle at the default, still 9 at 0.9. Its decomposition is dominated by high-frequency structure. Needs manual inspection before inclusion.
+3. **EOG detection is completely stable** — exactly 2 components for every subject at every threshold. Blink detection works; muscle detection is the unreliable half.
+
+Chose 0.9 (3 of 4 subjects inside the 1-4 target) plus `MAX_ICA_COMPONENTS_EXCLUDED = 5`. The cap is the important part: if detection wants more than a quarter of the decomposition, flag the subject rather than silently reconstructing from a handful of components. EOG is never capped; muscle is capped by score, strongest kept. `diagnostics["capped"]` records when it fired, for the audit log. Threshold 1.0 was rejected — all four subjects land in range there, but only because muscle detection is entirely disabled.
+
+**This is a pipeline-wide issue, not a TBR issue.** The same ICA cleaning feeds the scalograms and topomaps. F09080101's images would have been built from 5 surviving components out of 19.
+
+**Third measured sensitivity on the same feature.** TBR now has three documented dependencies on implementation choice:
+
+| Choice | Shift in TBR |
+|---|---|
+| mean vs integral band power | 4.88x |
+| 751 vs 750 samples per epoch | 27% |
+| ICA muscle threshold | 8-311% |
+
+The middle one was discovered accidentally: the `tmax` off-by-one fix changed epochs from 751 to 750 samples, moving df from 0.6658 to 0.6667 Hz. That tiny change made FFT bins land exactly on the band edges (4.0/8.0/12.0/30.0) instead of straddling them — theta span went from 3.33 Hz to the full 4.00 Hz. **A one-sample change in epoch length moved the primary biomarker by 27%.**
+
+General rule adopted: choose `nperseg` so `fs/nperseg` divides evenly into the band edges. At 500 Hz, 750/1000/2000 all work; 751 does not.
+
+Taken together this is an independent replication, on our own data, of the 2020 five-algorithm null and the 2026 multiverse analysis. **Belongs in the discussion section** — it is stronger evidence than citing theirs, because it is ours.
+
+**Open decisions before the full run:**
+- No QC policy yet for capped/high-rejection subjects. Include, exclude, or flag? Needed before Phase 2.
+- F09080101 specifically needs manual inspection.
+- All images and classical features remain stale pending regeneration.
+
+**Still outstanding across four sessions:** duplicate-subject-ID check on the 109 EOEC files; recovering `PROJECT.md` from git history. One command each, both blocking the full-cohort run.
+
+- **Next:** (1) duplicate-ID check and `PROJECT.md` recovery — these keep slipping and block everything; (2) re-run the 20-subject TBR check on artifact-rejected data; (3) `fix/yolo-augmentation-flags`; (4) `fix/topomap-grid-layout`.
+
+
+### 2026-08-24d — both four-session blockers cleared; first real 108-subject manifest exists
+
+Both items that kept slipping across four sessions turned out to be genuinely one command each, but the duplicate-ID "check" surfaced a real bug rather than just confirming or refuting the prediction.
+
+**`PROJECT.md` recovered.** It was never edited down — commit `78b1b1e` (2026-08-16) accidentally overwrote it with `PROGRESS.md`'s content (both are 38 lines, identical text). The real 125-line v2 guideline was intact at the initial commit (`971d71a`) the whole time. Restored via `git show 971d71a:PROJECT.md > PROJECT.md`; no content was lost or needed to be reconstructed.
+
+**Duplicate-ID prediction confirmed, and it's worse than "prediction, not yet verified" suggested.** Tested `discover_subjects`'s actual glob calls directly against the real 109-file dataset at `D:\ADHD-Faezeh Rohani-edf\edf (all)\`:
+- `glob("*-EOEC.edf")` and `glob("*-EOEC.EDF")` each returned the **same 108 paths** — Windows resolves both patterns against the same case-insensitive filesystem, so this isn't "108 lowercase + 108 uppercase distinct files," it's 108 real files each matched twice. `discover_subjects` concatenated both lists without deduping, so the loop would hit `sf.subject_id in subjects` on the very first repeated path and raise `ValueError` immediately — confirmed by direct reproduction, not just code reading. **Fixed** in `data_pipeline/subject_split.py::discover_subjects` by deduping matches on `os.path.normcase(os.path.abspath(path))` before the loop. Kept the double-glob (not simplified to one call) because on a genuinely case-sensitive filesystem (Linux), `.edf` and `.EDF` can be real distinct files and both still need to be found.
+- **Second, unrelated bug found by the same investigation:** one real file, `C11121140-2019.08.26-10.02.39-EOEC..edf`, has a double dot before the extension (a naming artifact in the source dataset, not our code). Neither glob pattern matches it, so `discover_subjects` was silently dropping subject C11121140 from the cohort entirely — not crashing, not logging, just absent. Caught by diffing every EOEC-ish filename on disk against what the glob actually matched. **Fixed:** `discover_subjects` now also walks `data_dir` and `warnings.warn()`s on any file containing the task token (`EOEC`) that didn't match the strict pattern, so a malformed filename is flagged for a manual naming decision instead of silently shrinking the cohort. Did not rename the source file — it's raw data outside the repo, and the fix belongs in code, not in the dataset.
+
+**Ran the real split for the first time.** `py -m data_pipeline.subject_split --data-dir "D:/ADHD-Faezeh Rohani-edf/edf (all)" --output data_pipeline/splits/subject_splits.csv`:
+- 108 subjects discovered (C11121140 correctly flagged and excluded, warning printed), 0 crashes.
+- Stratified holdout test: n=17 (9 Control / 8 ADHD). 5-fold CV over the rest: 18-19 subjects/fold, balanced within 1 subject per class per fold.
+- 108 rows in the manifest, 108 unique `subject_id` (no leakage at the discovery stage), 8 subjects missing a `vcpt_path` (expected — VCPT is optional per `SubjectRecord`, not every EOEC subject has a matching VCPT recording on disk).
+- This is the first real subject-level manifest this project has ever had against the full cohort — everything before this was 3-5 real subjects or synthetic data.
+
+**Not done this session (deliberately out of scope):** did not run `build_dataset.py` or generate images/features from this manifest. That's a long-running, GPU-adjacent step and every image/feature is already known-stale pending artifact-rejection regeneration (per 2026-08-24b/c) — running it now would produce output that needs regenerating anyway.
+
+- **Next:** (1) `build_dataset.py` on all 108 subjects using this manifest, now that both blockers are clear — the actual Phase 2 make-or-break run; (2) decide what to do about C11121140 (inspect the malformed file / ask the dataset source / accept 108 instead of 109) before that run; (3) re-run the 20-subject TBR check on artifact-rejected data; (4) `fix/yolo-augmentation-flags`; (5) `fix/topomap-grid-layout`.
+
+
+### 2026-08-24e — augmentation flags disabled; the environment was never real
+
+Goal was `fix/yolo-augmentation-flags` (one small change). Installing the dependencies to verify it exposed that the declared environment and the actual environment had nothing in common, and that Phase 2 was blocked by something not on any list.
+
+**`fix/yolo-augmentation-flags` — done and verified against a real training run.** `model.train()` ran with Ultralytics' photograph defaults: `fliplr=0.5` mirrors topomap hemispheres (destroying F3/F4 asymmetry) and reverses the scalogram time axis, `hsv_*` recolours a colormap where colour IS the measurement, `scale`/`erasing` crop or blank channels out of the composite. Added `DISABLE_AUGMENTATION`, spread into `model.train()`.
+
+**The flag list in the handoff doc was wrong in two ways, both caught by checking against the installed package rather than copying:**
+- It included `cutmix`, which is **not a valid key** in the pinned version — `check_dict_alignment` raises on unknown keys, so the training call would have crashed on the first fold.
+- It included `degrees`, `translate`, `shear`, `perspective`, `mixup` — all valid config keys, none of which `ClassificationDataset.__init__` ever reads. Setting them to 0.0 looks like a fix and does nothing. Confirmed by parsing that method's source for `args.<key>`; the classification path reads exactly 8 augmentation keys and no more.
+
+Method used, and worth reusing: derive the list from the source rather than from `default.yaml`, because `default.yaml` is the union across tasks. Recorded in the comment on the constant along with the one-liner to re-derive it.
+
+**Verified the way §6O asked for** — ran a real 1-epoch train on a toy dataset and read back the `args.yaml` Ultralytics writes: all 8 flags recorded exactly as intended. Also re-confirmed the relative-`project`-path nesting from 2026-08-17 still happens on the new version (the smoke test reproduced it), so `run_cv`'s `.resolve()` is still required.
+
+**BLOCKER FOUND, not on any prior list: the pinned Ultralytics cannot load pretrained weights on any installable torch.**
+- `ultralytics==8.2.31` calls `torch.load(file, map_location="cpu")` with no `weights_only` argument. PyTorch **2.6** flipped that default from `False` to `True`. So `YOLO('yolov8n-cls.pt')` — the first line of `run_cv` — raises `UnpicklingError`.
+- PROJECT.md calls ImageNet transfer learning "mandatory, not optional" at N=103, so this blocked Phase 2 completely and would have surfaced only at the first real run.
+- **Downgrading torch is not an escape.** I initially thought torch 2.5.1 was an option — that was a bad check: I grepped the wheel index without filtering for `win_amd64`, so I was reading Linux wheels. On Windows + Python 3.13 the oldest installable torch is **2.6.0**, i.e. the first version with the new default. Recorded because the wrong version of this claim is easy to re-derive.
+- **Resolved by upgrading to `ultralytics==8.3.253`**, which routes through a `torch_load` wrapper that handles it. Chose the last 8.3.x over 8.4.127 to stay closer to the 8.2.x the code was written against.
+
+**Re-verified the three things the upgrade put at risk** (all previously confirmed empirically against 8.2.31, all still hold on 8.3.253):
+1. `DISABLE_AUGMENTATION` — **did NOT survive**: `crop_fraction` was valid in 8.2.31 and is **removed** in 8.3.x, where passing it raises. Dropped it. (`cutmix` becomes valid here but classification still never reads it, so it stays out.) This is the concrete instance of §6O's own warning that arg names shift between versions.
+2. `gradcam.py`'s `model.model.model[8]` hook — still the `C2f` block, still immediately before `Classify` at `[9]`. Confirmed by loading the real model, not assumed.
+3. `gradcam.py`'s `(probs, logits)` tuple assumption — still a 2-tuple, and `probs == softmax(logits)` still holds.
+
+**`backend/requirements.txt` described an environment that has never existed.** Every single pin differed from what is installed — mne 1.7.1 vs 1.12.1, numpy 1.26.4 vs 2.4.4, pandas 2.2.2 vs 3.0.2, torch 2.3.1 vs 2.13.0, and so on for all 17 packages. Nothing was ever installed from this file; the working environment was assembled ad hoc and drifted completely away from it. This is not cosmetic: `classical_features.py` carries an `np.trapezoid` shim *because* `np.trapz` was removed in NumPy 2.0, which is only coherent against NumPy 2.x — the file claimed 1.26.4, where `np.trapz` still exists. Rewritten to the versions actually in use, with the reasoning inline.
+
+**`PyWavelets` was not installed at all** — `image_conversion.py` does `import pywt` for every scalogram, so `build_dataset.py` would have failed immediately on the full run. Installed (1.9.0). Also installed the missing `uvicorn` and `python-multipart`.
+
+**Housekeeping:** Ultralytics downloads pretrained weights into the CWD, so `yolov8n-cls.pt` landed in the repo root where `.gitignore`'s `models/*.pt` did not cover it. Added `*.pt`/`*.pth`.
+
+**Deliberately not done:** the topomap grid fix (§6J) — explained but not written, pending a decision on 2×3-with-Gamma vs 2×2-without. While reading that code I found two adjacent issues, flagged but not bundled: `nperseg=min(256, ...)` in `generate_topomap_image` violates the "`fs/nperseg` must divide evenly into band edges" rule adopted on 2026-08-24c (256 gives df=1.953 Hz; band edges 4/8/12/30 all straddle bins — the same class as the 27% TBR shift), and `(freqs >= lo) & (freqs <= hi)` puts the shared edge bin in both adjacent bands. Separately confirmed that the `.mean()` on line 116 is **not** the mean-vs-integral bug from #17 — each band is drawn with its own auto-scaled colormap, so a constant per-band factor cancels exactly. Stated so nobody re-fixes it.
+
+**Environment note:** CPU-only, no NVIDIA GPU. At ~1,300 epoch-images per subject × 108 subjects ≈ 140,000 images, trained 5× over for 5-fold CV, a full 30-epoch run is days on CPU. **This promotes §6T (cap epochs per subject per condition) from optimization to prerequisite** — and it independently improves the VCPT-dominance problem (65% of images) rather than just being a speed hack.
+
+- **Next:** (1) `fix/topomap-grid-layout` (§6J) once the band decision is made; (2) §6T epoch capping — now a prerequisite for any CPU run, not an optimization; (3) `feat/save-oof-probabilities` (§6P) and `feat/evaluate-on-test` (§6Q), the two gaps that make Phase 2 unable to run end to end; (4) a reduced smoke run (2 folds, 3 epochs, capped images) to prove the chain before committing to a real one; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24f — topomap/coherence grid layout; recovering an orphaned commit
+
+**First, a git recovery worth recording so it isn't repeated.** The previous session's work (PROJECT.md recovery, glob dedup, augmentation flags, requirements rewrite) was committed onto branch `fix/duplicate-ultralytics-requirement` as `5d72788`, but PR #1 merged only the earlier commit on that branch (`5940b9d`, the duplicate-pin removal). `main` was then fast-forwarded and the branch deleted, leaving `5d72788` orphaned — the files on disk silently reverted to their pre-session state. Recovered with `git cherry-pick 5d72788`; no conflict, since the rewritten `requirements.txt` already satisfied the PR's intent (ultralytics listed once). Found via `git reflog`, which still held the commit. **Lesson: check `git log` shows the expected commits after a PR merge + pull; a fast-forward past your own branch discards it silently.**
+
+**`yolov8n-cls.pt` (5.5 MB) is now tracked** as of `9cae0e4`, and pushed. `.gitignore` gained `*.pt` in the recovered commit, but gitignore does not untrack an already-committed file, so the two now disagree. Ultralytics re-downloads this file on demand, so it does not need to be in the repo. Left tracked pending a decision — `git rm --cached yolov8n-cls.pt` removes it going forward, though it stays in history.
+
+**`fix/topomap-grid-layout` (§6J) — done, measured.** `generate_topomap_image` and `generate_coherence_image` both drew their 5 bands as `plt.subplots(1, 5, figsize=(10, 10))` — a single row on a square canvas. Both topomap heads and 19x19 coherence matrices render with equal aspect, so content is capped by the SHORTER side of its cell: 2 in wide in a 2 x 10 in cell, leaving the other 8 inches as whitespace.
+
+Added `_make_panel_grid(n_panels)`, shared by both functions: picks `rows = floor(sqrt(n))`, `cols = ceil(n/rows)` (5 -> 2x3), keeps the canvas square, and switches off leftover cells so they render blank rather than as empty framed boxes. Exercised at n = 1, 2, 4, 5, 6, 9.
+
+The square canvas is unchanged and load-bearing — it is what stops the final resize from stretching heads into ovals (the 2026-08-1x fix). Only the arrangement inside it changed.
+
+**Measured on a real generated image rather than asserted:**
+
+| Layout | Cell | Head Ø | Canvas inked |
+|---|---|---|---|
+| 1x5 (old) | 2.00 x 10.00 in | 44 px | 15.0% |
+| 2x3 (new) | 3.33 x 5.00 in | **74 px** | **41.8%** |
+
+1.68x linear, 2.83x area, at identical output size and compute. Regression check: head width 74 px vs height 75 px, aspect 0.987 — still round, oval fix intact. Coherence images went from the same ~1x5 waste to 54.1% inked.
+
+**The handoff's §6J figures were wrong and are corrected here.** It claimed 2x3 gives "~110 px, 4x effective resolution." ~110 px is the **2x2** number (5 in cells), and 2x2 holds only four panels. Real 2x3 result is 74 px / 2.83x area. Still clearly worth doing — but the arithmetic had been attached to the wrong layout.
+
+**Deliberately not done: the 2x2 variant.** It would give ~112 px, but requires dropping a band to four. The obvious candidate is Gamma, which §6N already flags as filter-shaped (50 Hz low-pass and 50 Hz notch overlap, transition band ~44-56 Hz). That is a decision about which bands the model sees, not a layout change, so it stays open rather than being bundled into a layout commit.
+
+**Found while testing, not fixed here:** `spectral_connectivity_epochs` emits `fmin=0.500 Hz corresponds to 0.750 < 5 cycles based on the epoch length 1.500 sec, need at least 10.000 sec epochs or fmin=3.333. Spectrum estimate will be unreliable.` The **Delta-band coherence panel is not a trustworthy estimate at 1.5 s epochs** — the library says so explicitly. Same root cause as §6M (cone of influence): 1.5 s epochs cannot support low-frequency estimates. Either lengthen epochs for the coherence representation specifically (it is already computed per subject per condition, not per epoch, so it is free to use a different windowing) or drop Delta from the coherence panels. Not bundled here.
+
+- **Next:** (1) §6T epoch capping — prerequisite for any CPU run; (2) `feat/save-oof-probabilities` (§6P) and `feat/evaluate-on-test` (§6Q); (3) reduced smoke run (2 folds, 3 epochs, capped) to prove the chain end to end; (4) decide the Gamma/2x2 question and the Delta-coherence question above; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24g — the CNN and classical halves of Phase 2 are finally connected
+
+**`feat/save-oof-probabilities` (§6P) — done.** `run_cv()` computed per-subject validation probabilities on every fold, used them once for that fold's metrics, and dropped them. `fusion_classifier.run_fusion_cv()` takes exactly that table as its `cnn_subject_probs` argument. Nothing connected the two, so **the fused arm of the Phase 2 comparison could not be produced at all** — the headline result is CNN-alone vs classical-alone vs fused, and one of the three had no code path.
+
+Added `collect_oof_predictions(fold_frames, manifest)`; `run_cv()` now accumulates each fold's `subj_df` and returns `(results_df, oof_df)`; `main()` writes `<representation>_oof_cnn_probs.csv` alongside the existing CV results.
+
+**Why concatenated validation folds are legitimately out-of-fold**, recorded because it is the property the whole fusion step depends on: every subject belongs to exactly one fold, and each fold's predictions come from a model that never trained on that fold's subjects. So each row is a prediction on a subject unseen by the model that produced it. Fitting the meta-classifier on in-sample CNN probabilities instead would let it learn to trust an over-confident feature and inflate the fused number.
+
+Written per-representation (`scalogram_oof_cnn_probs.csv`, `topomap_oof_cnn_probs.csv`) because the CNN probability differs between the two models and fusing against the wrong file would silently mismatch rather than error.
+
+**Safety properties, tested both ways rather than assumed:**
+- Duplicate `subject_id` across folds **asserts** — that would mean a subject was validated in two folds, i.e. the split itself leaked. Verified it fires by deliberately injecting a duplicated fold, not just by reading the code.
+- A dev subject with no OOF row **warns and continues**. This happens for real when a subject produced no images (preprocessing failure, or skipped as EC/EO-ambiguous by `build_dataset.py`). It matters because that subject is then absent from the fusion table too, so the CNN-alone and fused arms would be scored on different cohorts — exactly the kind of silent mismatch that makes a comparison table wrong without looking wrong.
+- Empty input raises instead of returning an empty table.
+
+**Verified the actual handoff, not just the function.** Fed the produced table straight into `build_fusion_table()` and then `run_fusion_cv()` end to end on synthetic subjects: merge produces the required `pred_prob_adhd` / `split` / `group` columns, no `split_x`/`split_y` collision (the bug fixed on 2026-08-19 stays fixed), the all-NaN P300 column is dropped as designed, and all three folds train and score. The metrics from that run are meaningless — synthetic data with planted separation — but the chain is real.
+
+**Also:** `main()` now `makedirs(output_dir)` before writing, since it writes two files and no longer relies on Ultralytics having created the directory first.
+
+- **Next:** (1) `feat/evaluate-on-test` (§6Q) — the held-out test split still has no consumer, so `subject_split.py`'s two-stage design remains half-unused; (2) §6T epoch capping, prerequisite for any CPU run; (3) reduced smoke run (2 folds, 3 epochs, capped) against real images; (4) the Gamma/2x2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24h — the held-out test split finally has a consumer
+
+**`feat/evaluate-on-test` (§6Q) — done.** `subject_split.py` has carved out a stratified subject-level test set since 2026-08-16, and its docstring describes a two-stage design, but `run_cv()` only ever filtered that split out. Nothing read it. Half the design existed on paper only.
+
+Added `evaluate_on_test()`: trains one final model on the development folds, then predicts the test split once and reports subject-level accuracy/sensitivity/specificity/AUC.
+
+**Design decision, with the alternatives and why they lost** — this is a methods-section choice, not an implementation detail:
+- **Chosen: retrain one final model on dev, evaluate once.** Conventional, and it also produces the single trained checkpoint that Phase 3 (Grad-CAM) and Phase 5 (`/predict`) both require and neither currently has — `best.pt` now lands in `runs/<representation>_final/weights/`.
+- **Rejected: ensembling the k fold models.** Costs no extra training, which is genuinely attractive on CPU, but "the model" becomes an ensemble and that muddies the Grad-CAM interpretability claim Phase 3 is built around.
+- **Rejected outright: picking the best-scoring fold model.** Those models were selected on their own validation folds; choosing among them by that score and then reporting a test number carries the selection bias straight through.
+
+**The subtle trap this had to avoid:** Ultralytics always selects `best.pt` by validation accuracy on whatever it is handed as `val`. Passing it the test split would be selection-on-test — the same optimistic bias §6R flags for the CV loop, but landing on the one number that is supposed to be a clean generalisation estimate. So the final model takes an `inner_val_fold` (a development fold, default the last one) purely for checkpoint selection, and `evaluate_on_test` **raises** if asked to use `test` for it. Verified that guard fires rather than assuming it.
+
+**Known cost of that choice:** the final model trains on 4 of 5 dev folds, so ~20% of development data is spent on checkpoint selection. A smaller inner-validation slice (say 10% of dev subjects rather than a whole fold) would recover most of it. Not done — it is a separate change and needs its own stratification logic.
+
+**Also refactored `predict_val_fold` into `predict_class_dirs`**, so CV folds and the test split go through the *same* prediction code. Two prediction paths that could drift apart is exactly how a final test number quietly stops being comparable to the CV numbers printed beside it. Ran the full CV loop afterwards as a regression check: 3 folds, 12 OOF rows, correct columns — the refactor did not break it.
+
+**CLI is deliberately opt-in:** `--evaluate-on-test` is off by default, because a test number that is easy to re-run is a test number that will get iterated against. `--skip-cv` exists for the case where CV already ran, and errors if used without `--evaluate-on-test` rather than silently doing nothing.
+
+**Writes per-subject rows, not just the summary** (`<rep>_test_subject_preds.csv`): `significance_test.py`'s bootstrap needs individual outcomes, and a fused test number needs these probabilities alongside the classical features. Saving only the metrics dict would force a full retrain to recover them.
+
+Independently asserts, against the manifest, that no dev subject appears in the test predictions — `verify_fold_dataset` already checks this, but this is the one number reported as a generalisation estimate, so it is worth two independent checks rather than one.
+
+Tested end to end on real generated images: the guard on `inner_val_fold='test'` fires, missing test images give a clear actionable error rather than an obscure one, and the full path trains and evaluates 4 test subjects with no dev leakage. Metrics from that run are meaningless (1 epoch, 36 random images) — the plumbing is what was verified. Symlink-based fold assembly also confirmed working on Windows, which was an open risk.
+
+- **Next:** (1) §6T epoch capping — still the prerequisite for any real CPU run; (2) reduced smoke run (2 folds, 3 epochs, capped) against REAL images from `build_dataset.py`, which has still never been run on the 108-subject manifest; (3) §6R inner-validation fix for the CV loop itself, now that the same mechanism exists for the final model; (4) the Gamma/2x2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24i — epoch capping, and the selection rule that nearly reintroduced the bug it fixes
+
+**`feat/epoch-capping` (§6T) — done.** Item (1) on the Next list for four sessions running, and the standing prerequisite for any real CPU run.
+
+**The cap already half-existed, which is why it stayed open.** `--max-epochs-per-task` has been wired through `build_dataset.py` into `image_conversion.py` since the batch driver was written — but as `default=None`, documented as a *"cap for quick testing"*. So the mechanism was there and the policy was not: every real run was uncapped, and the flag was something you remembered to pass.
+
+**Three independent reasons it is now a default of 300 per subject per task**, none of which is speed alone:
+1. **Recording length must not become a learnable feature.** Per-subject epoch totals span 1275–1616 (1.27×). Uncapped, session length is encoded directly in how many training images a subject contributes.
+2. **VCPT dominance.** VCPT yields ~870–920 epochs against ~200–370 each for EC and EO — ~65% of all epoch-images, two thirds of the training signal from one condition. A cap at 300 pulls VCPT to parity and leaves EC/EO almost untouched, since most subjects sit under it there already.
+3. **CPU tractability.** ~1,300 images × 108 subjects ≈ 140,000, trained 5× over for 5-fold CV, is days on a CPU-only machine.
+
+**The part that mattered more than the number: which epochs survive.** The existing implementation was `n = min(max_epochs, len(data))` followed by `range(n)` — keep the first N. Harmless for a smoke test, wrong as a policy, and wrong in a way that quietly *reintroduces reason 1*:
+
+| Recording length | Fraction covered by first-300 |
+|---|---|
+| 1275 epochs | 23.5% |
+| 1616 epochs | 18.5% |
+
+A first-N cap represents every subject by their opening minutes, and covers a *different fraction* of the session depending on how long that session was. Session position is not neutral — electrode impedance drifts, and drowsiness in a resting-state paradigm rises with time on task. So the cap installed to remove recording-length confounding would have smuggled it back in through the selection rule. Now `select_epoch_indices()` samples evenly across the whole recording via `np.linspace`: 100% span for every subject regardless of length.
+
+**Alternatives considered:**
+- **Chosen: uniform stride.** Deterministic — no seed to record in the manifest, identical output on re-run.
+- **Rejected: random subsample with fixed seed.** Immune to phase-locking against a periodic artifact, but adds a seed that must be tracked for reproducibility, and two seeds give two different datasets. Nothing in this cohort is known to be periodic at epoch scale, so this buys immunity to a hypothetical at a real cost.
+- **Rejected: keep first-N.** The smallest diff, and the one that preserves the confound.
+
+**Filenames carry the ORIGINAL epoch index, not a resequenced counter** — an image on disk still traces back to its position in the source recording. Verified this is safe downstream: `train_yolo_cls.subject_id_from_filename` splits on the *first* underscore, so it never reads that field. (Checked rather than assumed — filename parsing has broken twice before on this project.)
+
+**Verified, not assumed.** 30 assertions on `select_epoch_indices` covering the real cohort numbers (1275/1616/920) plus the tightest duplicate-risk case, n=301 capped to 300: exactly `cap` indices returned, strictly increasing (a duplicate would mean two identical images), first and last epoch both present, degenerate n=0 and cap=1 handled. Then end to end through the actual image-writing path on a synthetic 20-epoch subject: cap 5 produced indices `[0, 5, 10, 14, 19]`, scalogram and topomap covered the same epochs, and `subject_id` still parsed.
+
+**Caught by testing, not review:** argparse `%`-formats help strings, so the literal `~65%` in the `--no-epoch-cap` help text raised `TypeError: %o format: an integer is required` and crashed `--help` outright. Escaped to `%%`.
+
+**`--no-epoch-cap` exists** to reproduce the pre-cap dataset and measure what the cap costs. `run_batch`'s default was changed to match the CLI's rather than left at `None` — mismatched defaults would mean a programmatic caller silently builds an uncapped dataset that looks identical on disk to a capped one.
+
+**Not done:** the cap is uniform across tasks. If EC/EO turn out to carry more signal than VCPT, a per-task cap (higher for EC/EO, lower for VCPT) is the obvious refinement — but that is a weighting decision that wants a result to justify it, not a guess.
+
+- **Next:** (1) reduced smoke run (2 folds, 3 epochs, capped) against REAL images from `build_dataset.py`, which has still never been run on the 108-subject manifest — now unblocked; (2) §6R inner-validation fix for the CV loop itself; (3) the Gamma/2x2 and Delta-coherence decisions; (4) `fix/scalogram-normalization` (§6H).
+
+### 2026-08-24j — the docs were lying in three places, and one §-reference had no referent
+
+**Docs truth pass.** No code changed. Three claims in `README.md` were false against the committed state, and one gap turned out to be real but mis-described.
+
+**The README's headline warning was stale.** It opened with a blockquote saying `PROJECT.md` "is currently broken — a truncated copy of `PROGRESS.md`, not the methodology document." That was fixed in `93cfcc5`; the file is an intact 125-line document with sections 1–9. Anyone reading the README was being told not to trust a file that is fine.
+
+**But it pointed at something still real, narrower than it claimed.** The warning's second half — that modules cite sections which don't exist — still held for one specific class of reference. `PROGRESS.md` uses **§6H, §6J, §6M, §6N, §6O, §6P, §6Q, §6R, §6T** as its canonical work-item vocabulary across nine sessions, and `grep` finds **zero** of them defined anywhere in the repo. Section 6 of `PROJECT.md` is a Phase 0–5 roadmap with no lettered items in it at all. So the recovery restored the document but not whatever sub-numbering those IDs came from, and every `§6X` citation in the log dangled.
+
+**Added `PROJECT.md` §6a — a work-item index, explicitly labelled reconstructed.** Each ID is defined from how it is actually used in this log, with its branch name where one exists and its current status. It is *not* recovered from the original list, and says so in the section itself: the letters and the work they map to are evidenced, the wording is not original. Reconstructing rather than deleting the IDs was the choice because they are load-bearing — nine sessions of history refer to work by these letters, and renaming them now would orphan the log instead of fixing it.
+
+Two of the nine (§6M, §6N) have no branch and never will — they are a limitation and a pending decision, not tasks. Recording them as such is the point of the table.
+
+**Also corrected in the README, each verified against code rather than assumed:**
+- **Phase 1/2 status rows.** Discovery blockers are cleared (108-subject manifest exists, `C11121140` excluded for a malformed filename), and the CNN↔fusion plumbing now connects end to end.
+- **Three "open correctness issues" that are closed.** Missing Phase 2 plumbing (`collect_oof_predictions` exists), the never-evaluated test split (`evaluate_on_test` exists at `train_yolo_cls.py:264`), and the Windows case-insensitive glob duplicate (deduped by normalised path in `subject_split.py`). Checked each in the source before removing the claim, and added all three to "Real problems found and solved" as items 19–21 rather than dropping them — the intro to that open-issues list promises resolved items move there, and leaving a false promise in a truth pass would have been its own joke. §6R — CV optimistic bias — is the one item on that list still genuinely open, and is now tagged with its ID.
+- **"What's next" items 1, 2 and 3.** Two were already done (clear the discovery blockers, recover `PROJECT.md`), and the third still listed the ICA no-op and TBR units bug as pending when both are fixed.
+
+**A fourth false reference, flagged rather than fixed:** the README pointed at `docs/STUDY_GUIDE.md` in its second paragraph and in the repo-layout block. That file has never existed — `docs/` contains only `jira_board.md`. Writing the study guide is real work, not a docs correction, so both references now say it has not been written yet. Deleting them silently would have hidden a gap instead of recording it.
+
+- **Next:** unchanged — (1) `build_dataset.py` at cohort scale on the 108-subject manifest; (2) the reduced smoke run; (3) §6R inner-validation fix; (4) the Gamma/2×2 and Delta-coherence decisions; (5) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-24k — the pipeline could not produce a single image, and the warning pointed at the wrong cause
+
+**`fix/label-channel-rejects-all-epochs` — done.** Found by finally pointing `build_dataset.py` at the real cohort, which is exactly the kind of thing that only surfaces by running against real data.
+
+**Symptom:** every subject failed. `preprocess_subject` returned empty `Epochs` objects, and image generation then died with `RuntimeError: epochs.adding, dropping, or reordering channels() can't run because this Epochs-object is empty`. Two subjects tried, two failures, 0 images. Phase 1 had never actually been run at cohort scale, so this had been latent the whole time.
+
+**The warning blamed the wrong thing, which is why it looked familiar.** It read `ALL 866 epochs rejected at 250 uV peak-to-peak` — the same shape as the 150 µV incident on 2026-08-23, so the obvious read was "the threshold is wrong again." It was not. Measuring the real peak-to-peak distribution the same way as last time:
+
+| Subject | Stage | median p2p | kept at 250 µV |
+|---|---|---|---|
+| F10101111 | post-ICA | 116 µV | **91.7%** |
+| C09110104 | post-ICA | 232 µV | **56.6%** |
+
+250 µV was keeping most epochs, not none. The p2p threshold was never the cause.
+
+**Real cause: the `LABEL` channel.** These files carry 22 channels — the 19 real EEG channels, X1/X2 (dead, dropped on load), and `LABEL`, a digital marker channel that is **constant by construction** (measured median p2p = 0.000 µV). MNE types it as `eeg`, and `epoch_signal` passed `flat=dict(eeg=1e-7)` with no `picks`. `flat` drops an epoch if **any** channel falls below threshold. A permanently-flat channel therefore rejected **100% of epochs on 100% of subjects**, forever.
+
+**This is the same channel as `Real problems found and solved` #9**, where LABEL was riding into the coherence calculation as a 20th channel. That was fixed at the coherence call site with an explicit `.pick()`. The same channel was still leaking into epoching, one function upstream, where it was fatal rather than merely wrong.
+
+**The fix follows the convention the module already had.** `filter_raw()` and `remove_artifacts_ica()` both restrict to `[ch for ch in CHANNELS_19 if ch in raw.ch_names]`. `epoch_signal()` was the one stage that did not, and now does. LABEL stays on the `Raw` — `extract_vcpt_behavioral_proxy()` reads it there — and is excluded only from epochs, which never needed it.
+
+**Also fixed: the misleading warning.** It named the peak-to-peak threshold unconditionally, even when `flat` did the rejecting. It now reports both thresholds and, from `epochs.drop_log`, the channels actually responsible, most frequent first. A message that had said `LABEL (866)` would have ended this in one read instead of sending an investigation after the threshold value.
+
+**Verified on real data, not synthetic.** The two subjects that failed now produce images end to end — 64 PNGs across scalogram/topomap/coherence in the correct `representation/split/class` layout. Extended to a clean 8-subject run spanning both groups and four folds: **8/8 ok, 0 failed**, against 0/2 before the fix. The two subjects reporting `n_vcpt=0` are the ones with no VCPT file in the manifest, not failures.
+
+**A real rejection rate appeared once the fix landed**, which is the threshold doing its job rather than a flat channel masking it: C09110104 drops 69.2% of EC epochs and is flagged for QC, consistent with its measured distribution (250 µV keeps 30.8% of that subject's EC epochs). Subjects differ a lot here, and the QC policy question (`Open correctness issues` #2) now has real numbers attached to it rather than being hypothetical.
+
+**Measured cost of a cohort run**, from two timed points (cap 5 → 37 s, cap 50 → 100 s on one subject): ~0.47 s per epoch (two images each) plus ~30 s fixed per subject for load/filter/ICA on two files. At the default cap of 300 that is roughly **6 minutes per subject, ~11 hours for all 108**, producing ~150,000 images. Not started here — that is a deliberate decision, not something to kick off as a side effect.
+
+- **Next:** (1) the cohort-scale `build_dataset.py` run, now genuinely unblocked; (2) the reduced smoke run against those real images; (3) §6R inner-validation fix; (4) the QC policy for high-rejection subjects, which now has measured rates behind it; (5) the Gamma/2×2 and Delta-coherence decisions; (6) `fix/scalogram-normalization` (§6H).
+
+
+### 2026-08-25 — cohort dataset built; the midpoint EC/EO assumption was wrong, but only slightly
+
+The 108-subject `build_dataset.py` run happened. **94 ok, 14 skipped ambiguous, 0 failed**, ~122,000 images, ~5 hours (not the 11 estimated — the per-subject fixed cost amortises better at scale than the two-point measurement suggested). Five image-affecting fixes landed first, deliberately, so the run would not have to be repeated.
+
+**Cohort composition settled.** 108 subjects, 52 ADHD / 56 Control, against the paper's 103 (49/54). No duplicate subject IDs — 109 EOEC files minus one malformed filename (`C11121140`). The five extras are unexplained and no demographics file ships with the dataset. Reporting on 108 and stating the deviation, noting the 75.8%/84.5% baseline was computed on 103.
+
+**Subject ages recovered from the ID encoding.** IDs decompose as `[C|F]YYMMDDNN` — birth date plus serial — and the recording date is in the filename, so age is derivable despite no demographics file. All 108 parse, and every age falls in 6.1–11.1 years, which is what a pediatric ADHD cohort should look like. **Groups are age-matched: ADHD 8.29 ± 1.22 y, Control 8.43 ± 1.04 y, Mann-Whitney p = 0.50.** This matters more than it looks: slow-wave power falls and alpha peak frequency rises with age, so an age difference would have made "elevated theta in ADHD" partly "younger children". Ages are DERIVED from an inferred scheme, not read from a file — state that in the methods.
+
+**Rejection audit across the cohort.** EC rejects systematically harder than EO (23.6% vs 14.3%, worse in 86/108 subjects). `audit_rejection.py`'s own verdict called this "penalising eyes-closed alpha" — **that verdict is wrong**, and its own evidence says so: worst-channel attribution is 87% frontal (Fp1 72, Fp2 65, F7 50, F8 48) against 13% occipital (O1 15, O2 19). That is ocular artifact, most plausibly drowsiness-related slow eye movements during several minutes of eyes-closed rest, not alpha. The verdict was inferred from the EC>EO asymmetry alone without checking which channels were responsible. Consequence: **keep 250 µV, it is catching real artifact.** Also measured: only **1.4 of 19 channels** drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch — per-channel interpolation is a real follow-up.
+
+**Condition imbalance largely fixed itself.** Rejection hits EC hardest and the epoch cap hits VCPT hardest, and they pull in opposite directions: the mix went from EC 18% / EO 18% / VCPT 65% to **EC 27% / EO 30% / VCPT 44%**. §6T is no longer the concern it was.
+
+---
+
+**The main investigation: is the EC/EO midpoint split correct?** `split_eoec_by_alpha` has always hard-coded `half = n // 2`. Nobody had checked. Four diagnostics, and **each one caught an error in the one before it.**
+
+**Attempt 1 — a second vote from frontal artifact. ABANDONED.** Since drowsiness raises frontal ocular artifact during eyes-closed, the higher-artifact half should be EC. Calibrated on the 90 subjects alpha decided clearly: **72.2% agreement against a base rate of 92.2%** (alpha says EC-first in 83/90). The vote is 20 points *worse* than always guessing EC-first, so it carries no information. The script's own 70% pass threshold was wrong — it compared against 50% instead of the base rate. **Kept as a group-level finding:** EC halves median 150.2 µV vs EO 129.6 µV, Wilcoxon p < 0.0001. The mechanism is real; a ~15% median difference against between-subject variance simply cannot classify individuals. Significant group effect, useless individual predictor.
+
+**Attempt 2 — changepoint detection, pre-ICA.** Sliding the split point and maximising |log(alpha_before/alpha_after)| gave a median boundary of **0.564**, only 34/108 inside 0.45–0.55, median 1.44× "gain" over the midpoint. Looked decisive. **It was not evidence.** `best_score` is the maximum over every candidate boundary, so it exceeds the midpoint score *by construction* — a synthetic series with no changepoint at all scored gain 1.46×. Gain alone reports the optimiser, not the data.
+
+**Attempt 3 — two validation tests, both checked on synthetic data first.** *Permutation null:* shuffle the alpha profile in time and re-detect, 200×. Destroys temporal structure while keeping the values, so it asks "is there a changepoint" not "is there variance". Real boundaries p = 0.000, no-boundary p = 0.350. *Split-half by channel:* detect on O1 alone, then O2 alone. Median |k(O1) − k(O2)| over 30 sims — real 0.000–0.033, noise 0.250–0.258. (The obvious version of this test — "is the ratio more extreme at the detected boundary" — passed on pure noise too, same selection problem.)
+
+**Attempt 4 — two pre-checks, and the gate fired.**
+- **ICA moves the boundary.** The validation ran pre-ICA; the pipeline splits post-ICA. On a 20-subject check, agreement was 15/20 = 75%. But the pass criterion used the wrong denominator: 3 of the 5 "movers" never had a *detectable* boundary in either condition (p > 0.05 both sides), and asking whether ICA moved a boundary that does not exist is not a meaningful question. Restricted to detectable boundaries: 15/17 = 88.2%. Rather than patch the threshold, the fix was structural — **re-run the whole validation post-ICA**, so it measures the signal the pipeline actually splits.
+- **The pinned boundaries were clipped, not detected.** Six subjects sat exactly at `MIN_SEGMENT_FRAC = 0.20`. Relaxing to 0.10 moved **every one** (0.137–0.146, and F10050108 to 0.097), proving 0.20 was where the search stopped, not where the transition was. `MIN_SEGMENT_FRAC` lowered to 0.10 so the constraint stops masquerading as a detection.
+
+**The finding that mattered most: a statistical test needs a physical sanity check on top of it.** Four subjects passed *every* statistical test — permutation p = 0.005, split-half difference 0.000 — with boundaries putting one condition at **47–70 seconds** of an 8-minute recording. Real signal, but not the EC/EO transition; more likely an artifact burst or a brief eye-opening. Added `PLAUSIBLE_BOUNDARY_RANGE = (0.25, 0.75)` as an AND, not a tiebreaker. On the post-ICA run it **rejected 19 subjects that passed both statistical tests.**
+
+**Final post-ICA result:**
+
+| | pre-ICA | post-ICA (correct) |
+|---|---|---|
+| trusted | 85/108 (78.7%) | **64/108 (59.3%)** |
+| trusted-only median boundary | 0.567 | **0.537** |
+| trusted-only sd | 0.127 | 0.062 |
+| flagged subjects recoverable | 9/14 | **5/14** |
+| of which test subjects | 3 | **1** |
+
+The midpoint assumption **is** wrong — Wilcoxon vs 0.5, p < 0.00001 — but the effect is roughly half what the pre-ICA run suggested: **7.4% of the EO segment is eyes-closed data**, about 18 s of an 8-minute recording, and the bias runs one way (boundary > 0.5 in the large majority, so EO is contaminated with EC and never the reverse).
+
+**Decision: do NOT regenerate the cohort.** ~5 hours to move a boundary by 3.7% for the 59% of subjects the detector validates on, gaining 1 test subject. Instead rebuilt only the **5 flagged-and-trusted subjects** at their detected boundaries — ~30 minutes, same test-set gain. Verified by the segment ratios: C10061115 300/202 (0.6096), C11080128 273/86 (0.7010), C12010138 180/300 (0.3663), C12071145 227/140 (0.6382), C12110161 112/125 (0.5203). Before the fix C10061115 came out 258/258 — exactly equal, which is a midpoint split by definition, and the tell that nothing had been applied. **Test split 13 → 14.**
+
+**Two bugs found in the rebuild itself:**
+1. **`save_log()` truncated instead of merging.** Safe for a full-cohort run, destructive for a partial one: a 5-subject `--subjects` rebuild wiped the record of the other 103. Images survived; provenance did not. Now merges. **The general rule: any writer a partial run can touch must merge by default** — `--subjects` exists to make partial runs cheap, so a truncating writer behind it is a trap. Same shape as the earlier double-build collision.
+2. **The boundary was never passed through.** `split_eoec_by_alpha` accepted `boundary_frac` and returned `split_rule`, but `build_dataset.py` read neither, so the first rebuild used the midpoint — the very split that made those subjects ambiguous.
+
+`recover_build_log.py` rebuilt the 103 lost rows. Its first version parsed `build_cohort.log` and got **0 rows**: PowerShell's `Tee-Object` writes UTF-16LE, and reading it as UTF-8 with `errors="ignore"` produced garbage rather than failing. Rewritten to reconstruct from the manifest plus image counts on disk — better sources than a terminal log, and unmanglable.
+
+**Fifth entry for the sensitivity table.** The EC/EO split point: trusted-only median 0.537 vs the assumed 0.500, p < 0.00001. Like the ICA sensitivity, it changes *labels* rather than a feature value. Note also that the pre-ICA estimate (0.567) overstated it roughly 2×.
+
+**A larger question surfaced and is unresolved.** Alpha contrast changes drastically across ICA for some subjects — C10050113 3.60 → 0.66, F09080101 1.44 → 0.15, C12091154 3.69 → 1.25, but C12021125 6.22 → 170.74. Alpha blocking is among the most robust effects in electrophysiology; if it vanishes after ICA, ICA removed it. That would affect the EC/EO split, every generated image, and TBR — everything, not just an 18-second boundary error. **This is the next investigation and it gates training.**
+
+- **Next:** (1) `audit_ica_alpha.py` — occipital alpha pre/post ICA per subject, and the occipital weight of every excluded component; a genuine ocular component is frontal-dominant with near-zero O1/O2 loading; (2) §6R inner-validation fix for the CV loop; (3) reduced smoke run against the real images; (4) Phase 2 proper.
+
+
+### 2026-08-25b — ICA is removing occipital alpha across most of the cohort. Do not train on this dataset.
+
+`audit_ica_alpha.py`, run on all 108 subjects. The question was whether ICA removes genuine brain signal along with artifact. It does, and more widely than the four flagged cases suggested.
+
+**Result:**
+
+| | |
+|---|---|
+| median occipital alpha retained across ICA | **0.643** |
+| subjects losing >25% | **68/108 (63%)** |
+| subjects losing >50% | **34/108 (31%)** |
+| worst | C12071142 at **0.02x** — 98% of its occipital alpha gone |
+| subjects gaining >50% | 0/108 |
+
+The median subject loses **36% of occipital alpha**. Alpha blocking is among the most robust phenomena in electrophysiology — Berger described it in 1929 and it has replicated ever since. Losing a third of it is not a preprocessing side effect to note in passing.
+
+**The measurement validates itself.** Five subjects had zero components excluded (F11071144, C12030157, C12071145, F10030105, C12110161) and every one retains **exactly 1.00x**. The metric is measuring ICA's effect, not drift in the estimator.
+
+**The mechanism is NOT occipital-dominant components.** That was the hypothesis this script was written to test, and it is wrong:
+
+- 63% of subjects are damaged, but only **9 of 313 excluded components (2.9%)** are occipital-dominant
+- `corr(components removed, alpha retained) = -0.336` — a weak dose-response, not the strong one an indiscriminate-removal story would predict
+
+**The real mechanism is component topography.** Comparing what a real artifact looks like against what is actually being removed:
+
+| | occipital weight | frontal weight |
+|---|---|---|
+| a genuine ocular component | 0.09 | 4.05 |
+| a temporal muscle component | 0.10 | 0.22 |
+| **the median component actually removed** | **0.951** | **1.000** |
+
+A weight of 1.0 in every region means **uniform** — no region dominates. The median removed component is not focal anywhere; it is spatially diffuse. Removing a diffuse component subtracts signal from every channel proportionally, so occipital alpha goes with it. **No occipital-dominant component is required to lose occipital alpha**, which is why the obvious hypothesis missed and why the correlation is weak.
+
+So `find_bads_eog` and `find_bads_muscle` are flagging components that are not focal artifacts at all. Their spectral criteria are being met by things whose spatial signature says they are not eye movement or muscle.
+
+**One piece of good news: the loss is not differential between groups.** ADHD median retention 0.629, Control 0.651, Mann-Whitney **p = 0.68**. This was the live risk — the literature reports ADHD children move more, so preprocessing damage could plausibly have landed unevenly and manufactured a between-group difference in exactly the band the biomarkers come from. It did not. The damage is real but symmetric.
+
+**A correction I owe from the previous entry.** I reported C12021125 as "alpha contrast 6.22 → 170.74, a 27x GAIN". Those were `best_score` values from the boundary detector, which **maximises** |log ratio| over every candidate split — so the two numbers were taken at different boundaries and were never comparable. Measured properly at a fixed midpoint: **5.63 → 5.40**, essentially unchanged. There is no 27x gain, and 0/108 subjects gained >50% alpha. The framing overstated a case that was not a case.
+
+**Consequence: the 122k-image dataset is compromised.** Every image was generated from ICA-cleaned signal — the scalograms, the topomaps, the coherence maps, the EC/EO split (which is *decided* by occipital alpha), and TBR. Regeneration is now required, but only after the ICA step is fixed; regenerating against the current detector would just reproduce the same damage more expensively.
+
+**Proposed fix — a topography veto, the same shape as the boundary plausibility guard.** A spectral detector needs a spatial sanity check on top of it, exactly as a statistical test needed a physical one. Concretely: refuse to exclude a component unless it is *focal in the region its detection reason implies* — an `eog` component must be frontally dominant, a `muscle` component temporally dominant — and never exclude a component whose topography is near-uniform, whatever the detector says. `docs/ica_components_audit.csv` already holds occipital and frontal weights for all 313 components, so the thresholds can be set from measured data rather than guessed. That has been the rule twice now: the two thresholds set from convention (150 µV, muscle 0.5) were both wrong; the two set from measurement were both right.
+
+**Also still open:** the earlier finding that only **1.4 of 19 channels** drive epoch rejection. Whole-epoch rejection discards ~17 clean channels per rejected epoch, and per-channel interpolation would recover most of the 23.6% EC loss without keeping artifact. Worth bundling into the same regeneration.
+
+- **Next:** (1) set topography thresholds from `ica_components_audit.csv` and add the veto to `remove_artifacts_ica`; (2) re-run `audit_ica_alpha.py` and confirm median retention moves toward 1.0; (3) consider per-channel interpolation in the same pass; (4) regenerate the cohort **once**, with both fixes; (5) then §6R, smoke run, Phase 2.
+
+
+### 2026-08-25c — topography veto: alpha retention 0.643 -> 1.000. ICA question closed.
+
+The fix for the alpha loss, and it works. **A spectral detector needs a spatial sanity check** — the same shape as the physical plausibility check the EC/EO changepoint detector needed on top of its statistics. Same error, different domain.
+
+**Measured the full region breakdown first** (the previous entry's analysis used only occipital and frontal, which was a blind spot: muscle artifact is *temporal*, so every genuine muscle component looked diffuse by construction and a veto built on it would have rejected the muscle detector's whole output on a measurement artifact). With all six regions:
+
+```
+peak_region   central  frontal  frontopolar  occipital  parietal  temporal
+eog                17       13           77         20        17        12
+muscle             11       30           30         15        11        57
+```
+
+An `eog` component should peak frontopolar; **58% do** (including lateral frontal). A `muscle` component should peak temporal; **37% do**. Overall **48%**. Both detectors are wrong more often than right — they judge on spectral criteria with no spatial check, so a diffuse component whose frequency content happens to match gets removed, and removing a diffuse component subtracts signal from every channel proportionally.
+
+**The rule chosen: peak region must match the detection reason AND focality > 2.0.** Candidates measured on the real 313 components:
+
+| rule | kept/subject | est. retention |
+|---|---|---|
+| current (no veto) | 3.04 | 0.643 *(measured)* |
+| region must match reason | 1.46 | 0.840 |
+| focality > 1.5 | 1.67 | 0.866 |
+| focality > 2.0 | 1.08 | 0.934 |
+| region match AND focality > 1.5 | 0.96 | 0.934 |
+| **region match AND focality > 2.0** | **0.69** | **0.996** |
+
+**This was a judgment call, not a data-determined answer** — the last two candidates differ by 28 components and 0.06 of retention, and the data does not separate them. The reasoning for the stricter one: the two errors are asymmetric. Losing alpha is *demonstrated* (median 0.643, 34/108 below half) and damages the EC/EO split — which is *decided by* occipital alpha — plus every scalogram, topomap and coherence map. Surviving blinks inflate delta/theta, i.e. TBR's numerator, on a biomarker already measured at AUC 0.43/0.49/0.55; and 250 µV epoch rejection catches gross ocular artifact regardless.
+
+**Stated plainly, because it should not be buried:** at 0.69 components/subject, roughly a third of subjects get *zero* exclusions — ICA effectively off for them, with epoch rejection as the only artifact control. That is defensible only because the detectors are right 48% of the time, and five subjects had already run with zero exclusions retaining exactly 1.00x alpha, so the no-ICA path is not untested.
+
+**Validated on 20 subjects (10 ADHD / 10 Control):**
+
+| | before | after |
+|---|---|---|
+| median alpha retained | 0.643 | **1.000** |
+| range | 0.016 – 1.405 | 0.977 – 1.015 |
+| subjects losing >50% | 34/108 | **0/20** |
+| subjects losing >25% | 68/108 | **0/20** |
+| median occipital weight of removed components | 0.951 | **0.259** |
+| median frontal weight of removed components | 1.000 | **3.379** |
+| occipital-dominant components removed | 9 (2.9%) | **0 (0%)** |
+| corr(components removed, alpha retained) | −0.336 | **−0.059** |
+
+The kept components now sit close to the reference profile for a genuine ocular component (0.09 occipital / 4.05 frontal). 14 components across 20 subjects = 0.70/subject, matching the 0.69 prediction, with 7/20 subjects at zero exclusions.
+
+**One thing to confirm before regenerating.** The between-group difference p moved from 0.676 to **0.096** (ADHD median 1.0 components excluded, Control 0.5). At n=20 that is almost certainly noise, but *differential* exclusion between groups would be a confound — preprocessing would be treating the two classes differently. Confirm on the full cohort (1.5 h) before committing to a 5-hour regeneration built on it.
+
+**What this does NOT fix.** A 48% region-match rate means the detectors are barely better than chance at *locating* artifact. The veto salvages their output; it does not repair them. `mne-icalabel` classifies components from topography *and* spectrum together and remains the principled replacement — logged, not done.
+
+**Consequence unchanged: the 122k-image dataset must be regenerated.** Every image was produced from ICA-cleaned signal under the old behaviour. Bundle the regeneration with per-channel interpolation for epoch rejection (only 1.4 of 19 channels drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch) — one 5-hour run, not two.
+
+- **Next:** (1) full-cohort `audit_ica_alpha.py` to confirm retention and rule out differential exclusion; (2) per-channel interpolation; (3) regenerate the cohort **once**, re-tag `dataset-v2`; (4) §6R inner-validation fix; (5) smoke run; (6) Phase 2.
+
+### 2026-09-02 — first unbiased CNN result: AUC 0.503. The scalogram arm is at chance.
+
+The 30-epoch, 5-fold run completed on a Colab T4 in ~3.5 hours (0.70 h/fold). This is the first modelling number in the project that is not biased, not under-trained, and not a smoke test.
 
 | | |
 |---|---|
@@ -166,140 +661,157 @@ Caveats in both directions: n=20 is small and the CIs are wide, so this is *no e
 | specificity | 0.545 ± 0.153 |
 | **auc** | **0.503 ± 0.180** |
 
-Against baselines of 0.758 (SVM) and 0.845 (FS + LR).
+Baselines: 0.758 (Rohani SVM), 0.845 (FS + LR). **AUC 0.503 is exactly chance.**
 
-**The apparent signal in an earlier smoke run was the selection bias.** Before §6R was fixed, a 3-epoch run reported AUC 0.669. After the three-way split removed the bias, 30 epochs reports 0.503. That difference is what a reviewer would have caught — and it is the strongest argument for having done the methodological work first.
+**The apparent signal in the smoke run was the selection bias.**
 
-**The training curve says why:** training loss reaches 0.0004 by epoch 30 (all 14,470 images memorised) while validation accuracy never beats epoch 1 and stays flat near 0.53. With 1.44M parameters against roughly 50 training subjects per fold, the network learns *which subject* an image came from. Subject identity does not transfer, and subject-wise CV correctly refuses to reward it — `subject_split.py` doing exactly what it exists for. An epoch-level split would have reported a spectacular and meaningless number.
+| | smoke (biased, 3 ep) | real (unbiased, 30 ep) |
+|---|---|---|
+| accuracy | 0.630 | 0.487 |
+| auc | 0.669 | 0.503 |
 
-**What this establishes:** `yolov8n-cls` on 224×224 scalograms, fine-tuned end-to-end for 30 epochs, does not learn generalisable ADHD/Control discrimination on this cohort.
+Section 6R was worth 0.669 → 0.503. Had that fix not landed first, the reported headline would have been a 0.669 AUC that did not exist. This is the single strongest argument for having done the methodological work before the modelling work, and it belongs in the discussion.
 
-**What it does not:** that the representation carries no signal. Untested — a frozen backbone or linear probe (the capacity, not the epoch count, is the likely problem), early stopping, the topomap arm, coherence as tabular features, the expanded classical feature set, and the fusion classifier.
+**The training curve explains what happened:**
 
-**Two arms measured so far, both at chance:**
+| epoch | train loss | val top1 |
+|---|---|---|
+| 1 | 0.6790 | **0.630** |
+| 8 | 0.1750 | 0.535 |
+| 29 | 0.0010 | 0.530 |
+| 30 | 0.0004 | 0.533 |
+
+Training loss reaches **0.0004** — the model has memorised all 14,470 training images. Validation accuracy never beats epoch 1 and sits flat around 0.53 for the remaining 29.
+
+With 1.44M parameters and roughly 50 training subjects per fold, the network can learn *which subject* an image came from. Subject identity does not transfer to unseen subjects, and subject-wise CV correctly refuses to reward it. **That is `subject_split.py` doing exactly what it was built for.** An epoch-level split would have reported a spectacular number here.
+
+`fold_4` scored acc 0.235, sens 0.000, AUC 0.222 — *worse* than chance on 17 subjects. Combined with sensitivity varying ±0.298 across folds, most of the fold-to-fold spread is which subjects landed where rather than model skill. That is the n=84 / ~17-per-fold constraint made visible.
+
+**What this does and does not establish.**
+
+It establishes that **`yolov8n-cls` on 224×224 scalograms, fine-tuned end-to-end for 30 epochs, does not learn generalisable ADHD/Control discrimination on this cohort.** That is a real, honestly-measured result.
+
+It does not establish that the representation carries no signal. Untested: the topomap arm; the coherence maps as tabular features; a frozen backbone or linear probe (1.44M trainable parameters against ~50 subjects is almost certainly too much capacity); early stopping (the loss curve says the useful epoch was the *first* one); the expanded classical feature set; and the fusion classifier, which has still never run on real out-of-fold probabilities.
+
+**Where the project now stands on signal.** Two arms measured, both at chance:
 
 | feature | AUC |
 |---|---|
 | TBR — EC / EO / VCPT | 0.43 / 0.49 / 0.55 |
 | CNN on scalograms | 0.503 |
 
+Neither is a failure of execution. TBR at chance replicates a well-established literature. The CNN result is a clean measurement of a specific architecture on a specific representation at a specific sample size.
+
+**Immediate priorities for the next session, in order of expected value:**
+
+1. **Reduce capacity, not epochs.** A frozen backbone with a trained linear head, or freezing all but the last block. 1.44M parameters is the problem; 30 epochs merely reveals it. The memorisation curve is unambiguous.
+2. **Early stopping** — `patience=5` on the inner fold. Epoch 1 was the best epoch in every fold observed; 29 of 30 epochs were wasted compute and actively harmful to the checkpoint if `best.pt` selection ever drifted.
+3. **The topomap arm**, untested and structurally different — spatial rather than time-frequency.
+4. **The classical baseline and the paired comparison** — still unwritten, still the only way to make a statistically valid comparison against 75.8%. With CNN AUC at 0.503 this matters more, not less: a paired test can show the two methods are *equivalently* poor, which is itself reportable.
+
+**Housekeeping:** an unrelated Ultralytics run against its default `imagenet10` dataset (12 images, 10 classes) appeared in the Colab session — a stray `yolo train` with no arguments. Ignore it; it is not part of any result.
+
+**Operational note:** the Colab session dropped once mid-run (during fold 3) and had to be restarted from the beginning, because nothing was checkpointed to Drive between folds. Copying `runs/real` to Drive after each fold rather than at the end would make a dropped session cost one fold instead of all five.
+
+- **Next:** (1) frozen-backbone / linear-probe run; (2) early stopping; (3) topomap arm; (4) classical baseline + paired comparison; (5) fusion on real OOF probabilities.
+
+### 2026-09-11 — the classical arm closed, and the strongest features turn out to be arousal and artifact
+
+Added the last physiologically distinct feature family and re-ran everything. Every measurement in this project until now derived from spectral POWER — TBR, relative band power, the aperiodic slope, and the scalogram/topomap images are power representations too. Coherence measures phase relationships between regions: whether they communicate, not how much each does. It was the one untested family and the source paper lists it among its five retained groups.
+
+**Summarised rather than enumerated.** A 19×19 matrix over 5 bands and 2 conditions is 1,710 pairwise values on 84 subjects — the selector would have been choosing among noise. Instead: 25 region-level summaries (21 region pairs, intra-left, intra-right, inter-hemispheric, overall) × 5 bands × 2 conditions = 250 features. Verified on a synthetic matrix with a seeded frontal–parietal link: the summary recovered 0.4000 for that pair and ~0.02 elsewhere.
+
+Imaginary coherence, not plain — the same choice made for the images, for the same reason. Plain coherence returned 0.98–0.999 across every channel pair regardless of scalp distance, which is volume conduction rather than connectivity.
+
+**Result: pooled AUC 0.517 → 0.538.** CI [0.416, 0.660], permutation p = 0.268. The first arm to move upward, and still not significant.
+
+**But coherence is not why it moved.** Coherence is **45% of the feature space and 15% of the top-20 features** — underrepresented threefold. The selector prefers relative band power. The shift is 250 extra columns giving it more chances to find something that separates 84 subjects, not connectivity carrying signal. `k_selected` remains unstable across folds (10, 10, 80, 10, 40), the same pattern as before: no subset is consistently useful.
+
+**The important finding is WHICH features the selector chose.**
+
+```
+8 of the top 20:  eyes-open alpha at Fp1, Fp2, F4, Cz, Pz, T6, O1, O2
+4 of the top 20:  gamma at Fp1, Fp2, O1, O2, Fz
+3 of the top 20:  coherence
+```
+
+Eyes-open alpha across the entire scalp is not an ADHD marker. It measures **how well a child suppressed alpha on opening their eyes** — arousal, drowsiness, compliance with the instruction. The alpha-reactivity work already showed 12 subjects with *reversed* reactivity, i.e. no alpha blocking at all.
+
+And gamma, per this project's own methods note, sits inside the 50 Hz filter transition band and is contaminated by residual EMG. Gamma at Fp1/Fp2 is eye and forehead muscle.
+
+**So the most discriminative measurements in this dataset are arousal state and muscle artifact, not brain pathology.** That is not a pipeline failure — it is the pipeline reporting honestly what actually varies between these children. It belongs in the discussion, and it is a better explanation for published positive results than "those authors were careless": a classifier trained on a cohort where ADHD children are more restless will learn restlessness, and subject-wise CV will reward it as long as restlessness is stable within a subject.
+
+**Final results table, six measurements on the same 84 subjects (42 ADHD / 42 Control):**
+
+| arm | pooled AUC | 95% CI | permutation p |
+|---|---|---|---|
+| TBR (best condition, VCPT) | 0.550 | — | — |
+| CNN scalogram, full fine-tune | 0.503 | — | — |
+| CNN scalogram, frozen | 0.522 | [0.397, 0.641] | 0.311 |
+| CNN topomap, frozen | 0.523 | [0.393, 0.647] | 0.368 |
+| Classical, 301 power features | 0.517 | [0.398, 0.640] | 0.400 |
+| Classical, 551 features with coherence | **0.556** | [0.416, 0.660] | 0.268 |
+
+**Paired comparisons, all non-significant:**
+
+| pair | AUC difference | 95% CI | McNemar p | kappa |
+|---|---|---|---|---|
+| CNN scalogram vs CNN topomap | −0.001 | [−0.160, +0.163] | 1.000 | +0.020 |
+| CNN scalogram vs Classical | −0.035 | [−0.182, +0.110] | 0.856 | +0.284 |
+| CNN topomap vs Classical | −0.034 | [−0.187, +0.114] | 0.743 | +0.116 |
+
+The classical arm is now nominally best (0.556 vs 0.522/0.523), and the paired test says that difference is not distinguishable from zero (p = 0.639 and 0.659). Reporting "the classical arm outperformed the CNN" from a 0.035 gap with that interval would be exactly the kind of claim this project exists to avoid making.
+
+**The kappa values remain the most interesting structure.** The two CNN representations agree at +0.020 — barely above two independent coin flips — despite being the same architecture, on the same subjects, differing only in how the signal was drawn as an image. Neither is tracking anything subject-specific. The classical arm agrees more with the scalogram CNN (+0.284) than the two CNNs agree with each other, which is consistent with both picking up the same weak non-diagnostic property (recording quality, arousal, artifact level) rather than anything about ADHD.
+
+**The classical arm is closed on principled grounds**, not exhaustion: the last distinct feature family was added, measured, and contributed less than the measures it competed against. Three method families, six measurements, three paired tests, one conclusion.
+
+**Also built: `frontend/index.html`.** Single-file dashboard against the existing `/predict` endpoint, no build step. Its design problem was unusual — the interface has to make a null result legible rather than flatter a model. The hero is a measurement scale: the prediction placed on a 0–1 ruler with the model's measured 95% CI (0.397–0.641) shaded, so a prediction landing inside the band is visibly inside the range where it carries no information. A dashboard announcing "ADHD — 87% confident" from a chance-level model would be the genuinely indefensible artefact. Includes a worked-example mode using stored real values for C09090107, so the interface demonstrates without a backend or a trained checkpoint.
+
+**Decision: stop measuring.** Six measurements, three method families, all CIs containing 0.5, and the top features are arousal and artifact. A seventh measurement adds a row to a table that already says the same thing six times.
+
+- **Next:** (1) fusion once, for completeness — expect ~0.53, the kappa values say the arms are wrong about different subjects but none carries signal to combine; (2) email the dataset author about VCPT trigger coding, the one thing that could still change the picture since Rohani's 826 features included P300 and behavioural measures; (3) write the methods draft from this log.
+
+
+### 2026-09-11b — fusion completes the table. Phase 2 is finished.
+
+`fusion_classifier.py` had no entry point — it was written as a library for `run_cv` to call, which is why it prints "Feed this to fusion_classifier.run_fusion_cv()" and why `python -m training.fusion_classifier` produced no output at all. Added a CLI wrapper.
+
+**Result: AUC 0.548 ± 0.027.**
+
+| arm | pooled / mean AUC | fold-to-fold sd |
+|---|---|---|
+| CNN scalogram, frozen | 0.522 | 0.106 |
+| CNN topomap, frozen | 0.523 | 0.237 |
+| Classical, 551 features | 0.556 | 0.187 |
+| **Fusion (CNN + classical)** | **0.548** | **0.027** |
+
+Fusion lands *between* its inputs and below the classical arm alone. Exactly what the kappa values predicted: the arms disagree at near-chance rates (+0.020 to +0.284), so they are wrong about different subjects — but none carries signal to combine, and stacking near-random predictors gives a near-random predictor.
+
+**One detail worth keeping.** Fusion's fold-to-fold variance is far smaller than any single arm: **±0.027 against ±0.106, ±0.187 and ±0.237.** That is real and mechanistically expected — averaging two uncorrelated predictors reduces variance. It just does not add signal. Variance reduction around a chance-level mean is still chance, and it is a good illustration of why a stable-looking number is not the same as an informative one.
+
+**On the split used.** `run_fusion_cv` uses a two-way split rather than the §6R three-way one. That is acceptable here and not an oversight: the fusion model is a logistic regression with no checkpoint selection, so there is no best-epoch-chosen-on-X to leak, and the CNN probabilities feeding it were already out-of-fold. The residual issue is the standard stacking leak — subject S in fold 2 gets a CNN probability from a model trained on folds 0,1,3,4, while the fusion LR's training subjects have probabilities from models that included fold 2. Mild, well documented in the stacking literature, and with every arm at chance it cannot be what decides the result. Stated rather than fixed.
+
 ---
 
-**TBR is unstable under reasonable methodological variation — measured, not assumed.** Three implementation choices, each moving the same feature on the same data:
+**PHASE 2 IS COMPLETE.** Final table, same 84 development subjects (42 ADHD / 42 Control):
 
-| Choice | Shift in TBR |
-|---|---|
-| Mean vs. integral band power | **4.88×** |
-| 751 vs. 750 samples per epoch | **27%** |
-| ICA muscle-detection threshold | **8–311%** |
+| arm | AUC | 95% CI | permutation p |
+|---|---|---|---|
+| TBR (best condition, VCPT) | 0.550 | — | — |
+| CNN scalogram, full fine-tune | 0.503 | — | — |
+| CNN scalogram, frozen | 0.522 | [0.397, 0.641] | 0.311 |
+| CNN topomap, frozen | 0.523 | [0.393, 0.647] | 0.368 |
+| Classical, 301 power features | 0.517 | [0.398, 0.640] | 0.400 |
+| Classical, 551 with coherence | 0.556 | [0.416, 0.660] | 0.268 |
+| Fusion | 0.548 | — | — |
 
-The middle one was accidental: fixing a one-sample `tmax` off-by-one changed `df` from 0.6658 to 0.6667 Hz, which made FFT bins land exactly on the band edges (4.0/8.0/12.0/30.0) rather than straddling them. Theta span went from 3.33 Hz to the full 4.00 Hz. *A one-sample change in epoch length moved the primary biomarker by 27%.*
+Every confidence interval contains 0.5. Every paired difference between arms is non-significant (p = 0.639 to 0.992). Baselines to beat were 0.758 and 0.845.
 
-The third is worse than a magnitude shift — the muscle threshold moves TBR in **inconsistent directions** across subjects (up in three, down in one), so it isn't cleanly stripping beta; it's a per-subject perturbation with no consistent sign.
+**The code is done.** What remains is not experimental:
 
-This is an independent replication, on this dataset, of the 2020 five-algorithm null and the 2026 multiverse analysis. It is stronger evidence than citing theirs.
+1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August, and the single most plausible explanation for the gap between 0.556 and 0.758 — Rohani et al. used 826 features including P300 and behavioural measures, which the trigger channel in this dataset does not permit computing.
+2. **Supervisor conversation**, before writing rather than after.
+3. **Write.** PROGRESS.md is now 773 lines and most of it is already a methods section: every parameter with its justification, every threshold and how it was measured, every bug and what it would have cost.
 
-**A useful side-effect:** EC > EO holds in 15/20 subjects, the physiologically expected direction. The five that don't (`F09081100`, `F09101156`, `F10011103`, `C10011101`, `C10020106`) are candidates for a flipped EC/EO assignment — suggesting a cheap QC rule where TBR direction must agree with `alpha_ratio`.
-
-**Measured for Phase 2 planning:** VCPT accounts for **65% of all epoch-images** (~870–920 per subject, vs ~200–370 each for EC and EO). Training on all three conditions mixed means two thirds of the training signal comes from one condition.
-
----
-
-## What's next
-
-1. **Confirm the veto on the full cohort** — 20-subject validation gives median retention 1.000, but the between-group difference p moved from 0.676 to 0.096 at that sample size. Almost certainly noise, but *differential* exclusion between groups would be a confound. 1.5 hours, cheap next to a 5-hour regeneration built on it.
-2. **Regenerate the cohort once, with both pipeline fixes** — the topography veto, and per-channel interpolation for epoch rejection (only 1.4 of 19 channels drive rejection, so whole-epoch rejection discards ~17 clean channels per rejected epoch). ~5 hours; do them together.
-3. **Prove the chain with a reduced smoke run** — 2 folds, 3 epochs, capped, against the regenerated images.
-4. **Compute TBR on the continuous segment** rather than 1.5 s epochs, which cap frequency resolution at 0.67 Hz.
-4. **Expand the classical feature set** — relative band power per channel per condition, aperiodic exponent/offset, individual alpha peak frequency, frontal alpha asymmetry, coherence summaries. Now critical path.
-5. **Close the last Phase 2 gap** — add an inner validation split to the CV loop (§6R) so epoch selection stops leaking. Out-of-fold probabilities (§6P) and held-out test evaluation (§6Q) are both done.
-6. **Phase 2 — the critical checkpoint:** real subject-wise 5-fold CV for all three approaches, with significance tests against 75.8% and 84.5%.
-7. **Phase 3** — Grad-CAM and clinical-plausibility against the real trained model.
-8. **Phase 4** — literature review, paper writing.
-9. **Phase 5** — dashboard, AWS deployment.
-
----
-
-```
-## Repo layout
-adhd-yolo/
-├── PROJECT.md                       # full methodology, decisions, roadmap  [BROKEN — see note at top]
-├── PROGRESS.md                      # session-by-session log
-├── data_pipeline/
-│   ├── preprocessing.py             # EEG loading, filtering, ICA, EC/EO split
-│   ├── image_conversion.py          # CWT scalograms + topomaps + EC/EO coherence maps
-│   ├── subject_split.py             # subject-wise train/test/CV manifest
-│   ├── build_dataset.py             # batch driver: images across the whole cohort
-│   └── build_classical_features.py  # batch driver: classical features CSV per subject
-├── training/
-│   ├── classical_features.py        # TBR (theta/beta ratio) biomarker computation
-│   ├── verify_tbr.py                # diagnostic: TBR variant comparison (read-only)
-│   ├── sweep_muscle_threshold.py    # diagnostic: ICA muscle threshold sensitivity
-│   ├── train_yolo_cls.py            # yolov8n-cls training + subject-level evaluation
-│   ├── fusion_classifier.py         # CNN + classical fusion meta-classifier
-│   └── significance_test.py         # bootstrap CI vs. published baselines
-├── interpretability/
-│   ├── gradcam.py                   # Grad-CAM for the trained yolov8n-cls model
-│   └── clinical_plausibility.py     # checks Grad-CAM attention against known ADHD sites
-├── models/                          # trained weights (gitignored — large files)
-├── backend/                         # FastAPI serving the model (Phase 5)
-├── frontend/
-│   └── index.html                   # dashboard — single file, no build step
-├── notebooks/                       # exploratory work
-├── docs/
-│   ├── STUDY_GUIDE.md               # the science: EEG, spectral analysis, ML, stats  [NOT WRITTEN YET]
-│   └── jira_board.md                # epic/story breakdown
-└── docker-compose.yml               # local dev, portable to EC2 later
-```
-
-## Tech stack
-
-Signal processing: MNE-Python, MNE-Connectivity, PyWavelets, SciPy. ML: PyTorch, Ultralytics YOLOv8/v11, scikit-learn, XGBoost. Backend: FastAPI. Containers: Docker + docker-compose. Cloud: AWS S3 + EC2 (g4dn.xlarge). Version control: GitHub with branch-per-feature + PR workflow. Project tracking: Jira.
-
-## Setup
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
-```
-
-Or via Docker:
-
-```powershell
-docker compose build
-docker compose up
-```
-
-Health check: `http://localhost:8000/health`
-
-**Windows note:** if `python`/`python3` resolve to an MSYS2 install (`C:\msys64\...`), packages installed by `pip` won't be visible. Use `py -m ...` or activate a venv. `where` in PowerShell is an alias for `Where-Object` — use `Get-Command python -All` to inspect.
-
-**Data root:** the raw `.edf` files are not in the repo. Point `$ADHD_YOLO_DATA_ROOT` at them once per machine:
-
-```powershell
-$env:ADHD_YOLO_DATA_ROOT = "D:\ADHD-Faezeh Rohani-edf"
-```
-
-`data_pipeline/splits/subject_splits.csv` stores paths **relative** to that root and is tracked in git — it is the single source of truth for which child is in which fold, and `subject_split.py` is designed never to regenerate it (regenerating reshuffles folds and invalidates any result computed against the old one). `load_manifest()` resolves those paths back to absolute ones at read time, so every downstream script keeps receiving openable paths. A manifest that still contains absolute paths continues to load unchanged; it is just not portable to another machine.
-
-**Import note:** `data_pipeline` and `training` scripts use package-relative imports and must be run as `python -m data_pipeline.<script>` from the repo root, not `python data_pipeline/<script>.py`.
-
-## Workflow
-
-`main` is always deployable — never commit directly to it. One branch per feature, small commits, PR into `main` even solo, delete the branch after merge. See `docs/jira_board.md` for the epic breakdown.
-
-## Known limitations (stated upfront, not hidden)
-
-- Dataset is ~103 subjects — small for a deep classifier; subject-wise validation and transfer learning are mandatory, not optional.
-- **The classical biomarker currently at the centre of the fusion design (TBR) does not separate the groups** on the 20 subjects tested (all AUC CIs contain 0.5). Sample size is small, so this is absence of evidence rather than evidence of absence — but the fusion path needs more than three features to be viable.
-- **Blink removal uses Fp1/Fp2 as EOG proxies**, since no real EOG channel exists in this dataset (X1/X2 are confirmed dead). Those are genuine EEG channels, so some real frontopolar brain activity is removed alongside ocular artifact. Acceptable here because TBR is computed at F3/F4/Fz, but it is a stated limitation.
-- **All TBR figures reported below predate artifact rejection.** They were computed on unrejected data and need re-running. Since the literature names movement artifact as a source of biased TBR estimates, a material change after rejection would itself be a finding.
-- P300 latency/amplitude and per-condition behavioral features are unavailable pending clarification from the dataset source.
-- **The per-frequency-row normalization applied to scalograms removes absolute band-power relationships**, which means the theta/beta ratio is not recoverable from the scalogram images by design. This was a fix for a visual problem that has a signal-content cost, and needs revisiting.
-- Grad-CAM and the clinical-plausibility check have not been run against a real trained model.
-- **The current 122k-image dataset must not be trained on.** It was generated before the topography veto, when ICA was removing a median 36% of occipital alpha. The cause is fixed; the images are not. Regeneration is required.
-- **The ICA component detectors are unreliable and the veto is a guard, not a repair.** `find_bads_eog` and `find_bads_muscle` place artifact correctly only 48% of the time. The veto discards their bad output, but roughly a third of subjects consequently receive zero component exclusions — ICA effectively off, with epoch rejection as the only artifact control. `mne-icalabel`, which classifies from topography and spectrum together, is the principled replacement and has not been evaluated.
-- **The CNN arm is at chance (AUC 0.503).** One architecture, one representation, one hyperparameter setting, on 84 development subjects — but it is a clean, unbiased measurement and it is reported as the result it is.
-- **n = 84 development subjects, ~17 per fold.** Sensitivity varies ±0.298 between folds and one fold scored below chance, so most fold-to-fold spread is which subjects landed where rather than model skill. Any accuracy figure from this cohort carries confidence intervals wide enough to overlap the published baselines.
-- This is a research/decision-support tool. It does not diagnose ADHD and is not a replacement for clinical evaluation.
+- **Next:** the paper.
