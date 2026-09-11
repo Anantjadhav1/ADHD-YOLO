@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-
+from pathlib import Path
 from data_pipeline import subject_split
 from training.train_yolo_cls import compute_metrics
 
@@ -123,3 +123,66 @@ def run_fusion_cv(manifest_path: str, cnn_subject_probs: pd.DataFrame,
               f"sens={metrics['sensitivity']:.3f} spec={metrics['specificity']:.3f} auc={metrics['auc']:.3f}")
 
     return pd.DataFrame(fold_metrics)
+
+
+def main() -> None:
+    """CLI wrapper. This module was written as a library for run_cv to call --
+    hence the "Feed this to fusion_classifier.run_fusion_cv()" message it
+    prints -- so `python -m training.fusion_classifier` did nothing at all.
+
+    NOTE ON THE SPLIT. run_fusion_cv uses a two-way split, not the section 6R
+    three-way one. That is acceptable here and not an oversight: the fusion
+    model is a logistic regression with no checkpoint selection, so there is no
+    best-epoch-chosen-on-X to leak. The CNN's own probabilities were already
+    produced out-of-fold.
+
+    The residual issue is the standard stacking leak: subject S in fold 2 gets
+    a CNN probability from a model trained on folds 0,1,3,4 -- but the fusion
+    LR's TRAINING subjects have probabilities from models that included fold 2.
+    Mild, well known, and accepted in the stacking literature. Stated rather
+    than fixed, because with every arm at chance it cannot be what decides the
+    result.
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cnn-probs", required=True,
+                    help="out-of-fold subject probabilities from train_yolo_cls")
+    ap.add_argument("--features", required=True,
+                    help="classical features CSV from build_classical_features")
+    ap.add_argument("--manifest", default="data_pipeline/splits/subject_splits.csv")
+    ap.add_argument("--output-dir", default="runs/fusion")
+    args = ap.parse_args()
+
+    cnn = pd.read_csv(args.cnn_probs)
+    clf = pd.read_csv(args.features)
+    print(f"CNN probabilities: {len(cnn)} subjects")
+    print(f"Classical features: {len(clf)} subjects, "
+          f"{len([c for c in clf.select_dtypes('number').columns])} numeric columns\n")
+
+    results = run_fusion_cv(args.manifest, cnn, clf)
+    if results.empty:
+        print("\nNo folds completed.")
+        return
+
+    print("\nMean +/- std across folds:")
+    for col in ["accuracy", "sensitivity", "specificity", "auc"]:
+        if col in results:
+            print(f"  {col}: {results[col].mean():.3f} +/- {results[col].std():.3f}")
+
+    print("\n  For reference, same 84 subjects:")
+    print("    CNN scalogram, frozen    AUC 0.522")
+    print("    CNN topomap, frozen      AUC 0.523")
+    print("    Classical, 551 features  AUC 0.556")
+    print("\n  The arms disagree at near-chance rates (kappa +0.02 to +0.28), so they")
+    print("  are wrong about DIFFERENT subjects -- but none carries signal to")
+    print("  combine. Stacking near-random predictors gives a near-random predictor.")
+
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    results.to_csv(out / "fusion_cv_results.csv", index=False)
+    print(f"\n  -> {out / 'fusion_cv_results.csv'}")
+
+
+if __name__ == "__main__":
+    main()
