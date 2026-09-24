@@ -43,3 +43,6 @@ runs/**/*.png
 runs/sixr_check/
 
 dataset_v2_small/
+
+# Generated demo images; regenerate with build_dataset.py --output-dir demo_images
+demo_images/

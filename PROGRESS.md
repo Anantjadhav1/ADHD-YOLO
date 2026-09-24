@@ -815,3 +815,33 @@ Every confidence interval contains 0.5. Every paired difference between arms is 
 3. **Write.** PROGRESS.md is now 773 lines and most of it is already a methods section: every parameter with its justification, every threshold and how it was measured, every bug and what it would have cost.
 
 - **Next:** the paper.
+
+### 2026-09-24 — Review 1; first live prediction end to end; the dashboard's chance band was answering the wrong question
+
+**Review 1 presented.** FF180 synopsis filled; the literature review now includes 2026 work that reaches the same conclusion independently. Strzelczyk, Vetsch & Langer (eLife, 2026) ran a 576-specification multiverse analysis (primary sample N = 1,122) and found a theta/beta difference in 1.91% of specifications, attributing reported TBR elevations to aperiodic activity and individual alpha frequency. Aggul (Frontiers in Neuroinformatics, 2026) measured window leakage directly: 95.59% accuracy with random-window splits, 60.98% on the same ADHD cohort with participant-disjoint evaluation.
+
+**The backend now runs end to end on Windows.** Four changes, one of them a latent crash:
+
+1. **Checkpoint.** `models/yolov8n-cls-trained.pt` is the frozen scalogram fold-0 `best.pt` from the Colab run (2,963,912 bytes). Trained on folds 2–4, epoch selected on fold 1, so fold 0 and the test split are unseen. Its own held-out AUC on fold 0 was 0.486 (n = 17). It has to be a scalogram checkpoint: `inference.py` generates scalograms, and a topomap model would score the wrong representation without raising.
+2. **`/predict` would have crashed on the first real request.** `inference.py` wrote per-epoch PNGs to a hard-coded `/tmp/...`, which Windows resolves to `D:\tmp\`, which does not exist. Every request would have raised `FileNotFoundError` and returned 500. Latent because no checkpoint had ever been present locally, and `main.py` returns 503 before inference runs. Fixed with `tempfile.mkdtemp()`.
+3. **Epoch cap.** A 12-minute recording yields ~500 epochs, each needing a CWT and a model call: minutes per request on CPU. Now 30 per condition, evenly spaced across the recording with `np.linspace` rather than the first 30, so one drowsy or restless stretch cannot dominate the average.
+4. **CORS** (permissive, commented) plus a root route. The dashboard is opened as `file://` and sends `Origin: null`. Acceptable for a local research tool with no authentication and no stored data; must be tightened before public deployment.
+
+**First live prediction.** `C12031144`: Control, held-out test split, EOEC only (no VCPT recording exists for this subject). p(ADHD) = **0.19**, classed Control, averaged over 60 epochs. TBR: EC 1.46, EO 0.78. Correct, and uninformative: one right answer from a model with pooled AUC 0.52 is a coin landing heads.
+
+**The dashboard's chance band conflates two quantities.** The shaded 0.397–0.641 is the bootstrap 95% CI of the pooled AUC, a statement about the model's ranking ability across 84 subjects. The dashboard draws it on the axis of a single child's predicted probability and captions it "a prediction inside it carries no information", which implies a prediction outside it does. Checked against the 84 out-of-fold predictions:
+
+| | correct | accuracy |
+|---|---|---|
+| inside the band | 38 / 69 | 55% |
+| outside the band | 8 / 15 | 53% |
+
+Outside-band predictions are no more reliable, and five ADHD children scored 0.30–0.39. The first live prediction landed outside the band, so the page's hero implied confidence while the text box beneath it said coin flip. The general rule: *an interval about a model is not an interval about a prediction.*
+
+**Fix, pending.** Replace the band with an empirical reference distribution, plotted as ADHD and Control dot strips under the live needle. The reference has to come from the same scoring path as the live prediction (same checkpoint, same 30-per-condition subset, same preprocessing), or it inherits a milder version of the same flaw: the stored out-of-fold values come from five different checkpoints scored on every epoch, and averaging fewer epochs produces more extreme values. The valid reference set is the **31 subjects this checkpoint neither trained nor selected on** (fold 0 + test), re-scored through `run_inference()`. Until the fix lands, the dashboard should not be shown.
+
+**`PROJECT.md` had been overwritten again.** Its content was a 267-line copy of an older README, committed on 2026-08-26 (`d229351`) inside a routine "updated the progress and readme" commit. The same thing happened on 2026-08-16 (`78b1b1e`, overwritten with the progress log). Both times, every reference to the methodology document kept pointing at a file that no longer contained it. Restored from `b3317f3`, the last good version (147 lines, with the §6a index), and §6a updated: §6H and §6R are done. A one-line check that each doc starts with its own title would catch a third occurrence.
+
+**The README had drifted.** It still described §6R as open, the ICA fix as awaiting regeneration, and scalograms as unable to carry TBR — all fixed for a month. The scalogram fix was never logged here at all: commit `3dc52e6` (2026-08-25) replaced row z-scoring with a three-view RGB encoding (global log power in R, aperiodic-corrected in G, row z-score in B) and measured TBR recoverability on synthetic epochs at r = 1.000 against the signal, versus r = −0.09 for the old encoding. Recorded now so the log is complete.
+
+- **Next:** (1) the dashboard fix above; (2) email the dataset author about VCPT trigger coding; (3) positive control: Rest vs Task on the existing images, same folds and §6R split (not EC vs EO: 64 of 108 boundaries were located using alpha, so that task is circular); (4) EEG-native models via `braindecode`; (5) the Nasrabadi dataset and cross-dataset validation; (6) web: QC report, PDF export, public deployment; (7) the paper.
