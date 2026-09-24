@@ -12,13 +12,30 @@ import os
 import tempfile
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-
+from fastapi.middleware.cors import CORSMiddleware
 from backend.app.inference import run_inference
 
 app = FastAPI(title="ADHD-YOLO API")
 
+# The dashboard is opened as a file:// page during demos, which sends
+# Origin: null. Permissive CORS is acceptable here because this is a local
+# research tool with no authentication and no stored data; it must be
+# tightened before any public deployment.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 MODEL_PATH = os.environ.get("ADHD_YOLO_MODEL_PATH", "models/yolov8n-cls-trained.pt")
 
+@app.get("/")
+def root():
+    return {
+        "service": "ADHD-YOLO API",
+        "docs": "/docs",
+        "endpoints": ["/health", "/predict"],
+    }
 
 @app.get("/health")
 def health():

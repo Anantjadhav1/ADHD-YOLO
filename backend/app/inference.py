@@ -16,6 +16,7 @@ untrained ImageNet weights and returning a meaningless prediction.
 import base64
 import io
 import os
+import tempfile
 
 import numpy as np
 from PIL import Image
@@ -68,14 +69,26 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
     # inline here since this is single-subject live inference, not a CV fold.
     probs_adhd = []
     last_image_path = None
+    # Per-epoch PNGs go in a real temp directory. The old hard-coded "/tmp/..."
+    # path only exists on Linux; on Windows it resolves to D:\tmp\, which
+    # usually doesn't exist, so the first save raised FileNotFoundError and
+    # every /predict request failed with a 500.
+    tmp_dir = tempfile.mkdtemp(prefix="adhd_yolo_infer_")
+    # Classify an evenly spaced subset of epochs, not all of them: a 12-minute
+    # recording gives ~500 epochs, each needing a CWT scalogram and a model
+    # call, which takes minutes on CPU. Spreading the subset across the whole
+    # recording (not the first N) stops one drowsy or restless stretch from
+    # dominating the average.
+    max_epochs_per_task = 30
     for task in ["EC", "EO"]:
         epochs = epochs_by_task[task]
         ch_names = epochs.ch_names
         sfreq = epochs.info["sfreq"]
         data = epochs.get_data()
-        for i in range(len(data)):
+        n_use = min(len(data), max_epochs_per_task)
+        for i in np.linspace(0, len(data) - 1, num=n_use, dtype=int):
             img = generate_scalogram_image(data[i], ch_names, sfreq)
-            tmp_path = f"/tmp/_infer_{task}_{i}.png"
+            tmp_path = os.path.join(tmp_dir, f"_infer_{task}_{i}.png")
             Image.fromarray(img).save(tmp_path)
             pred = model.predict(source=tmp_path, verbose=False)[0]
             names = pred.names
