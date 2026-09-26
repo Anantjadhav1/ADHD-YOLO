@@ -11,3 +11,13 @@
   §6R three-way split stay exactly as they are.
 - Read PROGRESS.md and README.md before suggesting anything.
 - You can reply in Hinglish.
+
+## Format for every change
+- File: <full path>
+- Find: <exact existing text, in a code block>
+- Replace with: <exact new text, in a code block>
+- For a NEW file: say "New file" and give the full content.
+- After each step works, give me the exact git commands:
+  git add <exact file names, correct case>
+  git commit -m "<message>"
+  git push
