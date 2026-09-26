@@ -842,6 +842,37 @@ Outside-band predictions are no more reliable, and five ADHD children scored 0.3
 
 **`PROJECT.md` had been overwritten again.** Its content was a 267-line copy of an older README, committed on 2026-08-26 (`d229351`) inside a routine "updated the progress and readme" commit. The same thing happened on 2026-08-16 (`78b1b1e`, overwritten with the progress log). Both times, every reference to the methodology document kept pointing at a file that no longer contained it. Restored from `b3317f3`, the last good version (147 lines, with the §6a index), and §6a updated: §6H and §6R are done. A one-line check that each doc starts with its own title would catch a third occurrence.
 
-**The README had drifted.** It still described §6R as open, the ICA fix as awaiting regeneration, and scalograms as unable to carry TBR — all fixed for a month. The scalogram fix was never logged here at all: commit `3dc52e6` (2026-08-25) replaced row z-scoring with a three-view RGB encoding (global log power in R, aperiodic-corrected in G, row z-score in B) and measured TBR recoverability on synthetic epochs at r = 1.000 against the signal, versus r = −0.09 for the old encoding. Recorded now so the log is complete.
+**The README had drifted.** It still described §6R as open, the ICA fix as awaiting regeneration, and scalograms as unable to carry TBR — all fixed for a month. The scalogram fix was never logged here at all: commit `3dc52e6` (2026-08-25) replaced row z-scoring with a three-view RGB encoding (global log power in R, aperiodic-corrected in G, row z-score in B) and measured TBR recoverability on synthetic epochs at r = 1.000 against the signal, versus r = −0.09 for the old encoding. 
+
+### 2026-09-26 — open issue 4 fixed: the dashboard shows a prediction among known children, not an interval about the model
+
+**A downloaded `ADHD-YOLO-main.zip` was checked against the working copy and not applied.** Ignoring line endings, only six files differ, and in every one the working copy is newer: the zip predates `e180f30` and `7c2bc93` (hard-coded `/tmp` path, no CORS, no epoch cap) and its `PROJECT.md` is the overwritten README copy from #26. Copying it over would have silently reverted the Windows crash fix and overwritten `PROJECT.md` a third time.
+
+**Built `training/score_reference_set.py`.** Scores the subjects the demo checkpoint neither trained on (folds 2–4) nor selected its epoch on (fold 1), i.e. fold_0 + test, through `run_inference()` itself: same checkpoint, same 30 epochs per condition, same preprocessing as a live request. The stored OOF values could not be reused, because they come from five different checkpoints scored on every epoch, and averaging fewer epochs gives more extreme values. VCPT is omitted, since the CNN scores EC/EO only. Writes after every subject and skips subjects already done, so a partial run resumes instead of truncating (#24). Output: `docs/reference_scores.csv`.
+
+**36 scored, not the planned 31.** The extra five (`C10041108, F10101138, C10020106, F11101129, F12111128`) are the fold_0/test subjects `build_dataset.py` skipped as EC/EO-ambiguous. Kept, because the live path applies no ambiguity rule, so any upload is scored exactly as they were. The conclusion is identical either way:
+
+| reference set | AUC | correct at 0.5 |
+|---|---|---|
+| all 36 (17 ADHD / 19 Control) | 0.551 | 18/36 |
+| 31, ambiguous excluded | 0.500 | 15/31 |
+
+p(ADHD) medians: ADHD 0.466, Control 0.488. The groups span the same range (ADHD 0.29–0.72, Control 0.15–0.63).
+
+**Dashboard (`frontend/index.html`):**
+- The 0.397–0.641 band is replaced with ADHD and Control dot strips of those 36 values, drawn under the live needle.
+- Verdict and header text updated to the Phase 2 table: seven measurements, four arms, 551 features. The old text said five methods and 301.
+- The worked example moved from `C09090107` to `F12070157`. `C09090107` is in fold_1, the checkpoint's selection fold, and its stored values (240 epochs) predate the 30-epoch cap. `F12070157` is ADHD, test split, a clean recording, p(ADHD) 0.496, classed Control. It was kept as a wrong prediction deliberately, because that is what this model does.
+- The TBR table gained a "Cohort, 10th–90th" column from `docs/classical_features_v3.csv` (EC 1.2–3.7, EO 1.1–3.1, VCPT 0.9–3.1). Without it, the worked example's values (1.27 / 0.75 / 1.19) sat below the published 1.5–3.5 with nothing to say whether that was a bug.
+
+**Two verifications, both passed:**
+1. **Scoring is deterministic.** `F12070157` re-scored with VCPT gave p(ADHD) = 0.4961, identical to the reference run without it.
+2. **The live and batch paths agree.** `/predict`'s TBR for `F12070157` (`tbr_ec = 1.271637925689496`, EO and VCPT likewise) matches `classical_features_v3.csv` to every decimal. The biomarkers the dashboard shows are the ones the Phase 2 classical arm used.
+
+**Findings recorded, not acted on:**
+1. **IAF is quantised by the epoch length.** At 1.5 s epochs the bins are 0.667 Hz, so 105 of 108 subjects' `iaf_ec` fall on five values (7.33–10.00 Hz). Same root cause as open issue 3.
+2. **QC warnings are the norm in the reference set, and the dashboard shows none of them.** 20 of 36 subjects had >30% epoch rejection in at least one condition, and 5 hit the muscle-component cap (`F11071139, C12031144, C12071142, F12111128, F11031145`). `C12031144`, the subject previously recommended for demos, is one of the worst: 85.8% EC and 72.6% EO rejected. A live upload of a recording like that gets a prediction with no warning attached.
+
+- **Next:** (1) email the dataset author about VCPT trigger coding, still the only route to a large legitimate change; (2) surface per-upload QC in the `/predict` response and on the dashboard (rejection rate per condition, `capped` flag), which turns the "Web: QC report" item into a concrete change and is the first step toward a policy for open issue 2; (3) positive control, Rest vs Task.
 
 - **Next:** (1) the dashboard fix above; (2) email the dataset author about VCPT trigger coding; (3) positive control: Rest vs Task on the existing images, same folds and §6R split (not EC vs EO: 64 of 108 boundaries were located using alpha, so that task is circular); (4) EEG-native models via `braindecode`; (5) the Nasrabadi dataset and cross-dataset validation; (6) web: QC report, PDF export, public deployment; (7) the paper.

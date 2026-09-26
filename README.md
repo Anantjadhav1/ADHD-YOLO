@@ -35,7 +35,7 @@ Rohani et al. (2022) — the paper this dataset comes from — got **75.8% accur
 | 2 — Baseline model + classical features + fusion | ✅ **Complete. Seven measurements, four arms, three method families — all at chance.** AUC 0.50–0.56, every CI containing 0.5, all paired differences non-significant |
 | 3 — Grad-CAM + clinical-plausibility check | ⬜ **Cut.** Attribution on a model at AUC 0.52 would show where a coin flip looks. A Grad-CAM figure over a null result would imply the model had learned something. The live dashboard still shows the overlay, captioned as attention rather than evidence |
 | 4 — Literature review + paper writing | 🟡 Literature review drafted, including 2026 work that independently reaches the same TBR conclusion. Paper not started |
-| 5 — Backend, dashboard, deployment | 🟡 **Runs end to end on a real recording** (2026-09-24): upload → preprocessing → CNN → Grad-CAM → biomarkers → dashboard. The dashboard's chance band needs fixing (open issue 4). Public deployment not started |
+| 5 — Backend, dashboard, deployment | 🟡 **Runs end to end on a real recording** (2026-09-24): upload → preprocessing → CNN → Grad-CAM → biomarkers → dashboard. The dashboard places each prediction among 36 reference children scored through the same path (solved issue 27). Public deployment not started |
 
 **Full dataset located, discovered and processed** (`D:\ADHD-Faezeh Rohani-edf\edf (all)\`, 109 EOEC files). The 109-vs-103 count resolved to **108 usable subjects** (52 ADHD / 56 Control), with `C11121140` excluded for a malformed filename. The cohort still exceeds the paper's 103 (49/54) by five subjects, unexplained and with no demographics file shipped; results are reported on 108 with the deviation stated, noting the 75.8%/84.5% baseline was computed on 103.
 
@@ -80,8 +80,8 @@ These were found by running code against real data, not by reading it. Items res
 
 1. **Seven subjects sit outside the intersection of all arms.** The classical arm covers 91 development subjects; the CNN arms cover 84, because 7 EC/EO-ambiguous subjects have features but no generated images. Paired comparisons use the 84-subject intersection and report what was dropped.
 2. **No QC policy for problem subjects.** The pipeline now warns above 30% epoch rejection and flags subjects where ICA component removal hits the cap, but there's no rule for whether to include, exclude, or flag them. **F09080101 specifically needs manual inspection** — muscle detection flags 14 of its 19 components at MNE's default threshold, meaning its decomposition is dominated by high-frequency structure. Still undecided.
-3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
-4. **The dashboard's chance band conflates two quantities.** The shaded 0.397–0.641 is the 95% CI of the pooled AUC, but it is drawn on the axis of a single child's predicted probability, captioned as if predictions inside it are uninformative and those outside are not. On the 84 out-of-fold predictions, outside-band predictions are correct 8/15 (53%) against 38/69 (55%) inside. Fix: replace it with ADHD and Control dot strips from the 31 subjects the demo checkpoint never trained or selected on, scored through the live path. *(§6R, previously listed here, is fixed; see the results section.)*
+3. **TBR is computed on 1.5 s epochs, which physically caps frequency resolution** at 0.67 Hz. The same cap quantises individual alpha frequency: 105 of 108 subjects' `iaf_ec` fall on just five values (7.33, 8.00, 8.67, 9.33, 10.00 Hz), coarser than the between-subject differences IAF is meant to capture. TBR is a subject-level summary and should be computed on the continuous segment instead, which would give both finer resolution and more averaging. *(The band-power units bug in the same function is now fixed — see below.)*
+
 
 ## Real problems found and solved
 
@@ -111,8 +111,8 @@ These were found by running code against real data, not by reading it. Items res
 23. **The EC/EO midpoint split was an unchecked assumption.** `split_eoec_by_alpha` always used `half = n // 2`. A changepoint detector validated post-ICA on all 108 subjects found the trusted-only median boundary at **0.537, not 0.500** (Wilcoxon p < 0.00001) — so the midpoint misplaces ~18 s of an 8-minute recording, and the bias runs one way: EO is contaminated with eyes-closed data, never the reverse. Real but small, and the detector validates for only 64/108, so it was **not** applied wholesale. `split_eoec_by_alpha` now accepts an explicit `boundary_frac`; it is supplied only for subjects the midpoint rule flagged as ambiguous *and* whose boundary passes all three checks. Five such subjects were rebuilt, taking the test split from 13 to 14.
 24. **`build_log.csv` truncated instead of merging.** Safe for a full-cohort run, destructive for a partial one — a 5-subject `--subjects` rebuild wiped the record of the other 103. Images survived; provenance did not. The general rule this is an instance of: *any writer a partial run can touch must merge by default.* `--subjects` exists to make partial runs cheap, so a truncating writer behind it is a trap. Same shape as an earlier double-build collision.
 25. **`/predict` would have crashed on Windows on the first real request.** `inference.py` wrote per-epoch PNGs to a hard-coded `/tmp/...`, which Windows resolves to `D:\tmp\`, which does not exist, so every request would raise `FileNotFoundError` and return 500. Latent because no checkpoint had ever been present locally, and `main.py` returns 503 before inference runs. Fixed with `tempfile.mkdtemp()`. Same shape as #22: invisible until the first real run.
-26. **`PROJECT.md` was overwritten by accidental pastes, twice.** On 2026-08-16 (`78b1b1e`) it was replaced with a copy of the progress log, and on 2026-08-26 (`d229351`) with a copy of this README, both inside routine doc-update commits. Each time the methodology document silently disappeared while every reference to it kept pointing at it. Restored from `b3317f3` on 2026-09-24. A one-line check that each doc still starts with its own title would catch a third occurrence.
-
+26. **`PROJECT.md` was overwritten by accidental pastes, twice.** On 2026-08-16 (`78b1b1e`) it was replaced with a copy of the progress log, and on 2026-08-26 (`d229351`) with a copy of this README, both inside routine doc-update commits. Each time the methodology document silently disappeared while every reference to it kept pointing at it. Restored from `b3317f3` on 2026-09-24.A one-line check that each doc still starts with its own title would catch a third occurrence.
+27. **The dashboard's chance band answered the wrong question.** The shaded 0.397–0.641 was the 95% CI of the pooled AUC, a statement about ranking across 84 subjects, drawn on the axis of one child's probability and captioned as if predictions outside it were informative. They were not: on the 84 out-of-fold predictions, 8/15 were correct outside the band against 38/69 inside. Replaced with ADHD and Control dot strips of the 36 subjects the demo checkpoint neither trained nor selected on (fold 0 + test), scored through `run_inference()` itself (`training/score_reference_set.py` → `docs/reference_scores.csv`), so the reference and the live needle come from the same path. The 5 EC/EO-ambiguous subjects are included because the live path applies no ambiguity rule: AUC 0.551 and 18/36 correct with them, 0.500 and 15/31 without. The worked example moved from `C09090107` (fold 1, the checkpoint's selection fold, values from the pre-cap path) to `F12070157` (test split, clean recording), whose p(ADHD) reproduced exactly across two runs and whose TBR matches `docs/classical_features_v3.csv` to full precision. The general rule: *an interval about a model is not an interval about a prediction.*
 None of this was visible from reading the paper or the dataset README — it surfaced only by loading and running against the actual `.edf` files, or by deliberately testing edge cases.
 
 ### Four diagnostics, each catching an error in the one before it
@@ -266,13 +266,12 @@ the gap between 0.556 and 0.758.
 
 Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the two things that could still change the result, and at the product.
 
-1. **Fix the dashboard's chance band** (open issue 4).
-2. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August. Rohani et al. used 826 features including P300 and behavioural measures, which need the trigger coding. This is the only route where a large, legitimate jump is plausible.
-3. **Positive control: Rest vs Task** on the existing images (EC+EO vs VCPT, same folds, same §6R split). If the pipeline that scores 0.52 on ADHD scores high here, the null result is about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
-4. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
-5. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
-6. **Web:** per-upload EEG quality-control report, PDF export, public deployment.
-7. **Paper.**
+1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August. Rohani et al. used 826 features including P300 and behavioural measures, which need the trigger coding. This is the only route where a large, legitimate jump is plausible.
+2. **Positive control: Rest vs Task** on the existing images (EC+EO vs VCPT, same folds, same §6R split). If the pipeline that scores 0.52 on ADHD scores high here, the null result is about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
+3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
+4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
+5. **Web:** per-upload EEG quality-control report, PDF export, public deployment.
+6. **Paper.**
 
 ---
 
@@ -357,9 +356,9 @@ py -m uvicorn backend.app.main:app --port 8000 --reload
 Then open `frontend\index.html` in a browser and upload an EOEC `.edf`. `http://127.0.0.1:8000/docs` lists the endpoints.
 
 - **Demo only on held-out test subjects** (listed as `test` in `data_pipeline/splits/subject_splits.csv`). This checkpoint trained on folds 2–4 and selected its epoch on fold 1; test subjects are unseen by every model in the project. Its own held-out AUC on fold 0 was 0.486.
-- **Leave VCPT empty for a fast demo.** The CNN uses EC/EO only; a VCPT upload adds a second ICA pass. `C12031144` (Control, no VCPT recording) is the fastest test subject.
+- **Leave VCPT empty for a fast demo.** The CNN uses EC/EO only; a VCPT upload adds a second ICA pass and changes only the biomarker table, not the prediction. `F12070157` (ADHD, the worked example) is a clean test recording. Avoid `C12031144` as a showcase: it is fast only because it has no VCPT, and it is one of the worst recordings in the cohort (85.8% of EC and 72.6% of EO epochs rejected, muscle cap hit).
 - Each request classifies 30 evenly spaced epochs per condition.
-- **Any single prediction is uninformative.** Pooled AUC is 0.52. Do not show the dashboard until open issue 4 is fixed.
+- **Any single prediction is uninformative.** Pooled AUC is 0.52. The dashboard places each prediction among 36 reference children scored the same way, so this is visible on the page rather than asserted.
 
 ## Workflow
 

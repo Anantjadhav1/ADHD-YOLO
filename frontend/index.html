@@ -66,23 +66,24 @@ button.ghost:hover:not(:disabled){background:rgba(22,36,43,.06)}
 .actions{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
 
 /* ---- the scale: the hero ---- */
-.scale{margin:2rem 0 .5rem;position:relative;height:5.5rem}
-.scale-track{position:absolute;left:0;right:0;top:2.25rem;height:2px;background:var(--ink)}
-.scale-band{
-  position:absolute;top:1.5rem;height:1.5rem;background:var(--chance);opacity:.22;
-}
-.scale-band-line{position:absolute;top:1.5rem;height:1.5rem;border-left:1px solid var(--chance);
-                 border-right:1px solid var(--chance)}
-.tick{position:absolute;top:2.25rem;width:1px;height:.5rem;background:var(--ink)}
+.scale{margin:2rem 0 .5rem;position:relative;height:6.5rem}
+.scale-track{position:absolute;left:0;right:0;top:4.25rem;height:2px;background:var(--ink)}
+/* Reference strips: one dot per held-out child, scored through this same page. */
+.ref-dot{position:absolute;width:9px;height:9px;border-radius:50%;
+         transform:translate(-50%,-50%);opacity:.55}
+.ref-dot.adhd{background:var(--flag)}
+.ref-dot.ctrl{background:var(--chance)}
+.strip-label{position:absolute;right:0;transform:translateY(-50%);
+             font-size:.75rem;color:var(--ink-soft)}
+.tick{position:absolute;top:4.25rem;width:1px;height:.5rem;background:var(--ink)}
 .tick.major{height:.85rem}
-.tick-label{position:absolute;top:3.3rem;transform:translateX(-50%);
+.tick-label{position:absolute;top:5.3rem;transform:translateX(-50%);
             font-size:.75rem;color:var(--ink-soft);font-variant-numeric:tabular-nums}
-.marker{position:absolute;top:.7rem;transform:translateX(-50%);text-align:center;transition:left .4s cubic-bezier(.4,0,.2,1)}
-.marker-stem{width:2px;height:2.1rem;background:var(--trace);margin:0 auto}
+.marker{position:absolute;top:0;transform:translateX(-50%);text-align:center;z-index:1;
+        transition:left .4s cubic-bezier(.4,0,.2,1)}
+.marker-stem{width:2px;height:3.9rem;background:var(--trace);margin:0 auto}
 .marker-dot{width:11px;height:11px;border-radius:50%;background:var(--trace);
             margin:0 auto -3px;border:2px solid var(--paper)}
-.band-note{font-size:.8125rem;color:var(--chance);position:absolute;top:4.6rem;
-           transform:translateX(-50%)}
 
 .readout{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap;margin:0 0 .25rem}
 .readout .value{font:500 3rem/1 "IBM Plex Mono",monospace;letter-spacing:-.02em}
@@ -128,9 +129,9 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
   </div>
   <p>Converts a child's resting-state EEG into time–frequency images and classifies them
   ADHD or Control with a transfer-learned CNN. Built to test whether that approach works.</p>
-  <p class="muted"><strong>It does not.</strong> Measured across five methods on 84 subjects,
-  the classifier performs at chance. This interface shows what the pipeline computes and where
-  the prediction falls against that measured uncertainty.</p>
+   <p class="muted"><strong>It does not.</strong> Seven measurements across four arms on 84
+  subjects all land at chance. This interface shows what the pipeline computes, and where a
+  prediction falls among children whose diagnosis is known.</p>
 </header>
 
 <section>
@@ -152,7 +153,8 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
     <button id="demo" class="ghost">Load a worked example</button>
   </div>
   <p class="small muted" style="margin-top:.9rem">The worked example uses stored results from
-  subject C09090107, so the interface can be shown without a running backend.</p>
+  subject F12070157, a held-out test subject no model in this project trained on, so the
+  interface can be shown without a running backend.</p>
 </section>
 
 <section id="results" hidden>
@@ -165,25 +167,25 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
   </div>
   <p class="small muted" id="nepochs"></p>
 
-  <!-- The hero: a prediction placed against the band where it means nothing. -->
+  <!-- The hero: this prediction against children whose diagnosis is known, scored the same way. -->
   <div class="scale" id="scale" aria-hidden="true">
-    <div class="scale-band" id="band"></div>
-    <div class="scale-band-line" id="bandline"></div>
     <div class="scale-track"></div>
     <div class="marker" id="marker" style="left:50%">
       <div class="marker-dot"></div><div class="marker-stem"></div>
     </div>
-    <div class="band-note" id="bandnote">measured chance range</div>
   </div>
-  <p class="small muted" style="max-width:64ch">The shaded range is the 95% confidence interval
-  measured for this model across 84 subjects: 0.397 to 0.641. A prediction inside it carries no
-  information about the child.</p>
+  <p class="small muted" style="max-width:64ch">Each dot is one child this model never trained on
+  or selected with — <span id="ref-n"></span> — scored through this same page: same checkpoint,
+  same 30 epochs per condition. The two groups spread across the same range, so wherever this
+  prediction lands, children from both groups landed there too. On these children the model
+  ranks ADHD above Control 55% of the time and classifies 18 of 36 correctly.</p>
 
   <div class="verdict">
-    <p><strong>Not usable for screening.</strong> Pooled AUC 0.52 with the interval above
-    containing 0.5, and a permutation test at p = 0.31. Five methods — two image
-    representations, two capacity settings and a 301-feature classical model — all land here.
-    Any single prediction from this system should be read as a coin flip.</p>
+    <p><strong>Not usable for screening.</strong> Across 84 development subjects the pooled AUC
+    is 0.52 (95% CI 0.40–0.64, permutation p = 0.31). Seven measurements across four arms — two
+    image representations, two capacity settings, a 551-feature classical model and a fusion of
+    both — all land at chance. Any single prediction from this system should be read as a coin
+    flip.</p>
   </div>
 </section>
 
@@ -207,9 +209,12 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
   <h2>Measured biomarkers</h2>
   <p>Computed from the signal directly, independently of the network.</p>
   <table>
-    <caption>Theta/beta ratio at F3, F4 and Fz. Published range for this age group is roughly
-    1.5 to 3.5.</caption>
-    <thead><tr><th>Condition</th><th style="text-align:right">Ratio</th></tr></thead>
+    <caption>Theta/beta ratio at F3, F4 and Fz. The cohort column is the middle 80% of the
+    children in this dataset, computed through the same pipeline; the published range for this
+    age group is roughly 1.5 to 3.5. In this cohort the ratio does not separate ADHD from
+    Control in any condition.</caption>
+    <thead><tr><th>Condition</th><th style="text-align:right">Ratio</th>
+      <th style="text-align:right">Cohort, 10th–90th</th></tr></thead>
     <tbody id="tbr-rows"></tbody>
   </table>
   <p class="small muted" style="margin-top:1.25rem">Event-related and behavioural measures
@@ -230,10 +235,19 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
 
 <script>
 const API = window.ADHD_API_BASE || "http://localhost:8000";
-// The 95% CI measured for this model across 84 development subjects. Hard-coded
-// deliberately: it is a property of the validated model, not of the uploaded
-// recording, and recomputing it per request would be meaningless.
-const CHANCE_LO = 0.397, CHANCE_HI = 0.641;
+// Reference distribution for the dot strips: p(ADHD) for the 36 subjects the demo
+// checkpoint neither trained on (folds 2-4) nor selected its epoch on (fold 1),
+// i.e. fold_0 + test, scored through run_inference() -- the same path as a live
+// request. Source: docs/reference_scores.csv (training/score_reference_set.py).
+// Replaces the old 0.397-0.641 band, which was the CI of the pooled AUC drawn
+// on the axis of one child's probability (open issue 4).
+// Includes the 5 subjects build_dataset.py skipped as EC/EO-ambiguous
+// (C10041108, F10101138, C10020106, F11101129, F12111128): the live path applies
+// no ambiguity rule, so an uploaded recording is scored exactly as they were.
+const REF_ADHD = [.289,.313,.330,.345,.353,.405,.412,.421,.466,.496,.517,.530,
+                  .578,.647,.652,.713,.721];
+const REF_CONTROL = [.151,.192,.312,.333,.344,.388,.394,.398,.431,.488,.490,.508,
+                     .514,.553,.585,.598,.613,.621,.630];
 
 const $ = id => document.getElementById(id);
 const eoec = $("eoec"), vcpt = $("vcpt"), runBtn = $("run"), demoBtn = $("demo");
@@ -267,11 +281,20 @@ function drawScale(){
   const scale = $("scale");
   if (scale.dataset.drawn) return;
   const pct = v => v * 100 + "%";
-  $("band").style.left = pct(CHANCE_LO);
-  $("band").style.width = pct(CHANCE_HI - CHANCE_LO);
-  $("bandline").style.left = pct(CHANCE_LO);
-  $("bandline").style.width = pct(CHANCE_HI - CHANCE_LO);
-  $("bandnote").style.left = pct((CHANCE_LO + CHANCE_HI) / 2);
+  [["ADHD", REF_ADHD, "adhd", "1.6rem"], ["Control", REF_CONTROL, "ctrl", "3rem"]]
+    .forEach(([name, vals, cls, top]) => {
+      vals.forEach(v => {
+        const d = document.createElement("div");
+        d.className = "ref-dot " + cls;
+        d.style.left = pct(v); d.style.top = top;
+        scale.appendChild(d);
+      });
+      const l = document.createElement("div");
+      l.className = "strip-label"; l.style.top = top;
+      l.textContent = `${name} · ${vals.length}`;
+      scale.appendChild(l);
+    });
+  $("ref-n").textContent = `${REF_ADHD.length} ADHD, ${REF_CONTROL.length} Control`;
   for (let i = 0; i <= 10; i++){
     const v = i / 10, major = i % 5 === 0;
     const t = document.createElement("div");
@@ -305,12 +328,16 @@ function render(r){
   }
 
   const c = r.classical_biomarkers || {};
-  const rows = [["Eyes closed","tbr_ec"],["Eyes open","tbr_eo"],["Attention task","tbr_vcpt"]]
-    .map(([name,key]) => {
+  // Cohort 10th-90th percentiles from docs/classical_features_v3.csv (108 subjects,
+  // 100 with VCPT) -- the same pipeline /predict runs; F12070157's live TBR values
+  // match that file to full precision.
+  const rows = [["Eyes closed","tbr_ec","1.2–3.7"],["Eyes open","tbr_eo","1.1–3.1"],
+                ["Attention task","tbr_vcpt","0.9–3.1"]]
+    .map(([name,key,cohort]) => {
       const v = c[key];
       return `<tr><td>${name}</td><td class="num">${
         v == null || Number.isNaN(v) ? '<span class="muted">not available</span>' : v.toFixed(2)
-      }</td></tr>`;
+      }</td><td class="num muted">${cohort}</td></tr>`;
     }).join("");
   $("tbr-rows").innerHTML = rows;
   $("biomarkers").hidden = false;
@@ -325,8 +352,8 @@ runBtn.addEventListener("click", async () => {
 
   runBtn.disabled = true;
   runBtn.innerHTML = '<span class="spin"></span>Analysing';
-  say("Preprocessing, generating images and classifying every epoch. A full recording takes " +
-      "a few minutes.");
+  say("Preprocessing, generating images and classifying 30 epochs per condition. This takes " +
+      "about half a minute, longer with a task recording.");
 
   try{
     const res = await fetch(API + "/predict", {method:"POST", body:fd});
@@ -354,19 +381,25 @@ runBtn.addEventListener("click", async () => {
 });
 
 // Stored output from a real run, so the interface can be demonstrated without a
-// backend. Values are the measured ones for C09090107, not invented.
+// backend. F12070157: ADHD, held-out test split, scored through run_inference()
+// with its EOEC + VCPT files -- the same path as a live request and as the
+// reference dots. p(ADHD) reproduced exactly (0.4961) across two runs, and the
+// TBR values match docs/classical_features_v3.csv to full precision.
+// The model classes this ADHD child as Control. Kept deliberately: a wrong
+// prediction in the middle of both strips is what this model does.
 demoBtn.addEventListener("click", () => {
   status.hidden = true;
   render({
     predicted_class: "Control",
-    confidence: 0.514,
-    n_epochs_analyzed: 240,
-    classical_biomarkers: {tbr_ec: 2.71, tbr_eo: 1.95, tbr_vcpt: 2.48,
+    confidence: 0.5039,
+    n_epochs_analyzed: 60,
+    classical_biomarkers: {tbr_ec: 1.27, tbr_eo: 0.75, tbr_vcpt: 1.19,
                            p300_latency_ms: null, p300_amplitude: null},
     gradcam_overlay_png_base64: null
   });
   $("figures").hidden = true;
-  say("Showing stored results for subject C09090107 (Control). No backend was called.");
+  say("Showing stored results for subject F12070157 (ADHD, held-out test split). " +
+      "The model classed this child as Control. No backend was called.");
 });
 </script>
 </body>
