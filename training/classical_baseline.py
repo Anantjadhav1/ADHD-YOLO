@@ -203,7 +203,10 @@ def main() -> None:
 
     # Pooled across all development subjects. Report THIS, not the fold mean:
     # ~17 subjects per fold is too few for a stable fold-level AUC, and
-    # averaging five noisy estimates is noisier than one estimate over 84.
+    # averaging five noisy estimates is noisier than one pooled estimate.
+    # NOTE: this pools over every development subject with features -- 91,
+    # not the 84 the CNN arms cover. For a same-cohort comparison use
+    # training/results_table.py, which restricts every arm to the intersection.
     y = (oof["true_label"] == "ADHD").to_numpy()
     p = oof["pred_prob_adhd"].to_numpy()
     pooled = _auc(p[y], p[~y])
@@ -223,12 +226,15 @@ def main() -> None:
     print(f"  permutation p  {(perm >= pooled).mean():.3f}")
     print(f"  accuracy @0.5  {((p >= 0.5) == y).mean():.3f}")
 
-    print(f"\n  For reference on the same 84 subjects:")
-    print(f"    CNN scalogram, frozen   AUC 0.521  CI [0.397, 0.641]  p=0.311")
-    print(f"    CNN topomap, frozen     AUC 0.523  CI [0.393, 0.647]  p=0.368")
-    print("\n  These are directly comparable -- same folds, same subjects, same")
-    print("  three-way split. Run paired_comparison.py for a test of the")
-    print("  DIFFERENCE, which is far more powerful than comparing two CIs.")
+    # This used to print the CNN arms' numbers here as "on the same 84
+    # subjects ... directly comparable -- same folds, same subjects". They
+    # are not the same subjects: this pools over all 91 (see above), and the
+    # CNN arms cover 84. That claim is how the README table came to pair the
+    # classical AUC on 84 subjects with its CI and p on 91 (2026-10-16).
+    print(f"\n  NOTE: pooled over {len(oof)} subjects. The CNN arms cover 84, so these")
+    print("  numbers are NOT on the same cohort as theirs. For a same-cohort table")
+    print("  run training/results_table.py; for a test of the DIFFERENCE between")
+    print("  two arms, run paired_comparison.py.")
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
