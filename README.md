@@ -175,16 +175,35 @@ Four arms across three method families, on the same 84 development subjects
 | CNN topomap, frozen backbone | 0.523 | [0.396, 0.650] | 0.360 |
 | Classical SVM, 301 power features | 0.522 | [0.399, 0.647] | 0.375 |
 | Classical SVM, 551 features with coherence | **0.556** | [0.431, 0.682] | 0.201 |
-| Fusion (CNN + classical) | 0.548 | — | — |
+| Fusion (CNN + classical) | 0.537 | [0.406, 0.667] | 0.277 |
 
 Every confidence interval contains 0.5. Baselines to beat were 0.758 and 0.845 (Rohani et al.'s *accuracies*; these are AUCs).
 
-The four rows with intervals regenerate from the committed out-of-fold files with `py -m training.results_table`: same 84 subjects, one procedure (10,000 bootstrap resamples, 5,000 permutations, seed 42 per arm), pinned by `tests/test_results_table.py`. **Corrected 2026-10-16.** The table always said "same 84 subjects", but the classical rows came from 91 (44 ADHD / 47 Control): the 301-feature row was entirely the 91-subject result (0.517, [0.398, 0.640], 0.400), and the 551-feature row paired its 84-subject AUC (0.556) with the CI and p of its 91-subject AUC (0.538). The CNN rows' intervals had been computed on Colab by code that is not in the repo and could not be regenerated. No AUC on the 84 changed, every interval still contains 0.5, and no conclusion moves. On the right cohort the 301-feature classical model and the scalogram CNN score the same, 0.522.
+The four rows with intervals regenerate from the committed out-of-fold files with `py -m training.results_table`: same 84 subjects, one procedure (10,000 bootstrap resamples, 5,000 permutations, seed 42 per arm), pinned by `tests/test_results_table.py`. **Corrected 2026-10-16.** The table always said "same 84 subjects", but the classical rows came from 91 (44 ADHD / 47 Control): the 301-feature row was entirely the 91-subject result (0.517, [0.398, 0.640], 0.400), and the 551-feature row paired its 84-subject AUC (0.556) with the CI and p of its 91-subject AUC (0.538). The CNN rows' intervals had been computed on Colab by code that is not in the repo and could not be regenerated. No AUC on the 84 changed, every interval still contains 0.5, and no conclusion moves. On the right cohort the 301-feature classical model and the scalogram CNN score the same, 0.522. The fusion row was also a different statistic from the rest — 0.548 was the mean of five fold AUCs, not a pooled AUC; pooled over the same 84 it is 0.537 (`py -m training.linear_sensitivity`, whose first row reproduces the committed fusion folds exactly).
 
 Paired tests between arms — far more powerful than comparing intervals, because
 both models are scored on the same subjects — find no significant difference
 anywhere: scalogram vs topomap p = 0.992, scalogram vs classical p = 0.639,
 topomap vs classical p = 0.659.
+
+### Post hoc and exploratory: a linear model on all 551 features
+
+**Not part of the table above, and not a result to cite as one.** Writing the methods found that the fusion model fits an L2-penalised logistic regression on 552 inputs *without standardising them*, so the penalty acts unevenly across units — every other model here standardises. `training/linear_sensitivity.py` re-runs it with standardisation, and — because a jump could come from the model class rather than from fusing — the same model without the CNN probability:
+
+| on the same 84 subjects | AUC | 95% CI | p (unadjusted) |
+|---|---|---|---|
+| fusion as published (unscaled) | 0.537 | [0.406, 0.667] | 0.277 |
+| fusion, standardised | 0.626 | [0.502, 0.745] | 0.025 |
+| engineered features only, standardised | **0.627** | [0.504, 0.745] | 0.024 |
+
+**The CNN contributes nothing**: the gain is entirely the change of model, from an RBF SVM choosing ≤80 features to a linear model weighting all 551. That linear model is the only ADHD-vs-Control specification in this project whose interval excludes 0.5. Reasons to hold it at arm's length:
+
+- It was specified **after** at least eight analyses of the same 84 children had been seen; p = 0.024 is uncorrected for that (a Bonferroni threshold over eight would be ~0.006).
+- The lower bound, 0.504, is at the edge.
+- Fold AUCs range 0.347–0.764.
+- Its largest weights fall on **eyes-open coherence** (16 of the top 40) and on **gamma at T3, O1 and O2** — temporal and occipital muscle sites — the same arousal-and-artifact family the engineered arm already pointed to (descriptive: one fit on all 84; L2 weights on correlated features are not a reliable attribution).
+
+Confirming it would need a model fixed in advance and data it has never touched. The 17-subject held-out split has not been used, but it cannot settle an AUC near 0.6 — its CI would span roughly ±0.25. An external cohort could.
 
 ### The bias mattered more than the model
 

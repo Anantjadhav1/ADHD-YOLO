@@ -981,6 +981,37 @@ Verified by applying the print rules as screen rules in the browser (the print d
 
 **`fastapi` realigned with its pin** (0.103.0 → 0.141.1, starlette 0.27 → 1.8.0, pydantic 2.13 → 2.14). `TestClient` works again: `/` and `/health` both 200. Environment only; `requirements.txt` already said 0.141.1. pip also reports `google-genai` wanting `anyio>=4.8` against the installed 4.4.0 — pre-existing (this install did not touch anyio) and not a dependency of this project.
 
-**In progress:** images for the CNN-arm positive control. A single sequential `build_dataset` run measured ~3 min/subject — ~5 h for 108 — so it was stopped after 3 subjects (no orphan process left behind, checked) and restarted as four parallel shards of 27, each with its own output directory so no two processes read-modify-write the same `build_log.csv`. All 108 subjects, `--include-ambiguous` so the QC record covers the whole cohort, 40 epochs per condition; ambiguous and test-split subjects are excluded from the positive control itself when the training set is assembled.
+**In progress (see 2026-10-16d):** images for the CNN-arm positive control. A single sequential `build_dataset` run measured ~3 min/subject — ~5 h for 108 — so it was stopped after 3 subjects (no orphan process left behind, checked) and restarted as four parallel shards of 27, each with its own output directory so no two processes read-modify-write the same `build_log.csv`. All 108 subjects, `--include-ambiguous` so the QC record covers the whole cohort, 40 epochs per condition; ambiguous and test-split subjects are excluded from the positive control itself when the training set is assembled.
 
 - **Next:** (1) the dashboard fix above; (2) email the dataset author about VCPT trigger coding; (3) positive control: Rest vs Task on the existing images, same folds and §6R split (not EC vs EO: 64 of 108 boundaries were located using alpha, so that task is circular); (4) EEG-native models via `braindecode`; (5) the Nasrabadi dataset and cross-dataset validation; (6) web: QC report, PDF export, public deployment; (7) the paper.
+
+### 2026-10-16d — methods draft; the fusion row was a different statistic; a post-hoc linear model is the first ADHD interval to clear 0.5
+
+**`docs/METHODS_DRAFT.md`.** A scaffold for the thesis methods chapter, every parameter read from the code rather than from this log, gaps marked **[verify]**. Writing it surfaced three things the project had not stated plainly:
+1. **The held-out test split has never been used for a one-shot evaluation.** `evaluate_on_test()` exists (2026-08-24h) but no run is recorded; the split was later used only for the dashboard's reference distribution, scored by a checkpoint that neither trained nor selected on it. Every result is development-fold CV. It was *not* run now: the ADHD images (cap 300) are on Colab, local images are cap 40, and a different configuration's test number beside the CV numbers would mislead — besides "stop measuring" being the standing decision.
+2. **The aperiodic fit is a log-log linear fit**, not specparam/FOOOF; the function's own docstring says not to call it FOOOF, while the module docstring says "specparam".
+3. **Fusion standardises nothing** before its L2-penalised logistic regression.
+
+**Which CNN arm fusion used was not recorded.** Resolved by reproduction: scalogram OOF + `classical_features_v3.csv` gives the committed `runs/fusion/fusion_cv_results.csv` fold AUCs exactly (0.514, 0.556, 0.542, 0.587, 0.542); topomap does not.
+
+**The fusion row in the table was a fold mean, the other rows pooled.** 0.548 = mean of the five fold AUCs. Pooled over the same 84 with the table's procedure: **0.537 [0.406, 0.667], p = 0.277**. README table corrected; conclusion unchanged.
+
+**Post hoc: standardising changes the fusion result — and the CNN has nothing to do with it.** `training/linear_sensitivity.py` keeps everything identical to the published fusion (same `run_fusion_cv`, folds, inner join, imputation, `LogisticRegression(max_iter=1000)`) and changes one thing at a time:
+
+| on the same 84 | AUC | 95% CI | p (unadjusted) | fold AUCs |
+|---|---|---|---|---|
+| fusion as published (unscaled) | 0.537 | [0.406, 0.667] | 0.277 | 0.514 0.556 0.542 0.587 0.542 |
+| fusion, standardised | 0.626 | [0.502, 0.745] | 0.025 | 0.625 0.625 0.708 0.730 0.347 |
+| engineered only, standardised | **0.627** | [0.504, 0.745] | 0.024 | 0.625 0.625 0.764 0.714 0.347 |
+
+Dropping the CNN probability changes nothing, so this is not a fusion effect: it is the model class — a linear model weighting all 551 standardised features, where the engineered arm's RBF SVM selects ≤80. It is the only ADHD-vs-Control specification in the project whose interval excludes 0.5, and it is **reported as exploratory and kept out of the main table**, because:
+- it was specified after at least eight analyses of the same 84 children were known; p = 0.024 is uncorrected (Bonferroni over eight ≈ 0.006);
+- the lower bound, 0.504, is at the edge;
+- fold AUCs span 0.347–0.764;
+- its largest weights are eyes-open coherence (16 of the top 40) and gamma at T3, O1, O2 — temporal and occipital muscle sites. That is the same arousal-and-artifact family the engineered arm's feature selection already pointed to (descriptive only: one fit on all 84, and L2 weights on correlated features are not a reliable attribution).
+
+The published `fusion_classifier.py` is unchanged, so the published number stays reproducible; the sensitivity script and its anchor test (`tests/test_linear_sensitivity.py` — the "published" variant must reproduce the committed fusion folds exactly before any other row means anything) carry the comparison.
+
+**What would settle it** is a model fixed in advance and data it has never seen. The 17-subject held-out split is untouched but too small: at n = 17 an AUC near 0.6 has a CI of roughly ±0.25, so it can neither confirm nor refute. An external cohort (Nasrabadi et al., `PROJECT.md` §3) could. Spending the held-out split is a decision for the project's author, not for an automated session, and was not done.
+
+- **Next:** (1) email the dataset author; (2) CNN-arm positive control — images still generating; (3) cohort-wide `capped` re-count from the new build-log columns; (4) decide whether the post-hoc linear model is worth a pre-specified test on an external cohort.

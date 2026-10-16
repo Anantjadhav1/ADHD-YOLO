@@ -71,7 +71,7 @@ Spectral features are computed from 1.5 s epochs, which bounds frequency resolut
 
 **Engineered-feature SVM** (`training/classical_baseline.py`). Median imputation → standardisation → `SelectKBest` (ANOVA F) with k ∈ {10, 20, 40, 80} → RBF SVM with C ∈ {0.1, 1, 10}, balanced class weights. k and C are chosen on the inner fold and the model is refitted on training + inner fold before scoring the outer fold, so feature selection never sees the subjects it is scored on.
 
-**Fusion** (`training/fusion_classifier.py`). Logistic regression (scikit-learn defaults: L2, C = 1, `max_iter` 1000) on a CNN arm's out-of-fold probability **[verify which arm — not recorded]** plus the 551 engineered features, median-imputed. Two limitations to state: features are **not standardised** before the penalised regression, so the penalty acts unevenly across units; and the standard stacking leak applies (the CNN probability for a subject in fold *k* comes from a model trained without fold *k*, while the fusion model's training subjects have probabilities from models that included fold *k*).
+**Fusion** (`training/fusion_classifier.py`). Logistic regression (scikit-learn defaults: L2, C = 1, `max_iter` 1000) on the **scalogram** CNN's out-of-fold probability plus the 551 engineered features, median-imputed. (Which arm was used had not been recorded; the scalogram file reproduces the committed fusion fold AUCs exactly and the topomap file does not.) Two limitations to state: features are **not standardised** before the penalised regression, so the penalty acts unevenly across units; and the standard stacking leak applies (the CNN probability for a subject in fold *k* comes from a model trained without fold *k*, while the fusion model's training subjects have probabilities from models that included fold *k*).
 
 **Three-way split for the CNN and SVM.** Within each outer fold the next development fold (rotating) is the inner fold, used only for checkpoint or hyperparameter selection, and the remaining three folds train. Selecting the epoch on the same fold that is scored inflates the estimate; this design prevents it at the cost of one fold of training data. Fusion uses a two-way split, acceptable because a logistic regression involves no checkpoint selection.
 
@@ -82,7 +82,12 @@ Spectral features are computed from 1.5 s epochs, which bounds frequency resolut
 - **Uncertainty.** 95% CI from 10,000 bootstrap resamples of subjects; one-sided permutation p from 5,000 label permutations (fraction of permuted AUCs ≥ observed); a fresh seed-42 generator per arm.
 - **Common cohort.** The headline table restricts every arm to the 84 development subjects all arms cover (42 ADHD / 42 Control), regenerated from the committed out-of-fold files by `training/results_table.py` and pinned by a test. The engineered-feature arm alone covers 91 (44 / 47).
 - **Paired comparisons** (`training/paired_comparison.py`, n = 84): bootstrap CI of the AUC difference, McNemar's test on the thresholded calls, and Cohen's κ for agreement.
+- Fusion is reported as a pooled AUC like every other arm (0.537). The figure previously quoted, 0.548, was the mean of five fold AUCs.
 - Accuracy, sensitivity and specificity at 0.5 are reported alongside. Rohani et al.'s 75.8% and 84.5% are **accuracies**; AUCs here should not be compared with them directly.
+
+## 7b. Post-hoc sensitivity analysis — exploratory (`training/linear_sensitivity.py`)
+
+Specified after the results above were known, so reported separately and not in the main table. Re-fitting fusion with standardised inputs raised the pooled AUC from 0.537 to 0.626; the same standardised logistic regression *without* the CNN probability gave 0.627 (95% CI 0.504–0.745, unadjusted permutation p = 0.024). The change is attributable to the model class — a linear model on all 551 standardised features rather than an RBF SVM on ≤80 selected ones — not to fusion. State: post hoc; at least eight prior analyses of the same subjects; uncorrected p; fold AUCs 0.347–0.764; largest weights on eyes-open coherence and temporal/occipital gamma. Not confirmable on the 17-subject held-out split (CI ≈ ±0.25).
 
 ## 8. Positive control (`training/positive_control.py`)
 
@@ -107,6 +112,6 @@ Python 3.13; MNE 1.12.1; NumPy 2.4.4; SciPy 1.17.1; scikit-learn 1.8.0; PyWavele
 5. Gamma (30–50 Hz) lies in the transition band of the 50 Hz low-pass and notch and carries residual EMG; frontopolar gamma is among the most "discriminative" features and is artifact.
 6. 1.5 s epochs limit spectral resolution (TBR, IAF).
 7. No QC-based exclusion; flagged recordings are included.
-8. Fusion features unstandardised; stacking leak.
+8. Fusion features unstandardised (standardising changes the result — §7b); stacking leak.
 9. The held-out test split was never evaluated one-shot.
 10. n = 84 gives 95% CIs of roughly ±0.13 AUC; the study can exclude large effects, not small ones.
