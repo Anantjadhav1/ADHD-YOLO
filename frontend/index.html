@@ -111,6 +111,17 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
         background:rgba(46,111,142,.06);margin-bottom:1.25rem}
 .status.err{border-color:var(--flag);background:rgba(154,69,54,.06)}
 .status p{margin:0}
+
+/* ---- recording quality: qualifies the number before the scale is read ---- */
+.qc{margin:1rem 0 0;padding:.75rem 0 .75rem 1.1rem;border-left:3px solid var(--rule)}
+.qc.flagged{border-color:var(--flag);background:rgba(154,69,54,.06)}
+.qc p{margin:0;max-width:64ch}
+.qc-head{font-weight:600}
+.qc.flagged .qc-head{color:var(--flag)}
+.qc-notes{margin:.45rem 0 0;padding-left:1.1rem;max-width:64ch}
+.qc-notes:empty{display:none}
+.qc-notes li{margin:.2rem 0}
+.qc-rates{margin-top:.45rem}
 [hidden]{display:none !important}
 .spin{display:inline-block;width:.85em;height:.85em;border:2px solid var(--paper);
       border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;
@@ -166,6 +177,14 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
     <span class="label" id="klass">probability of ADHD</span>
   </div>
   <p class="small muted" id="nepochs"></p>
+
+  <!-- Recording quality, from the same preprocessing that produced the scored epochs.
+       Above the scale on purpose: read the number with this already in mind. -->
+  <div id="qc" class="qc" hidden role="status">
+    <p class="qc-head"></p>
+    <ul class="qc-notes"></ul>
+    <p class="small muted qc-rates"></p>
+  </div>
 
   <!-- The hero: this prediction against children whose diagnosis is known, scored the same way. -->
   <div class="scale" id="scale" aria-hidden="true">
@@ -309,6 +328,29 @@ function drawScale(){
   scale.dataset.drawn = "1";
 }
 
+// Recording quality comes from the same preprocessing that produced the scored
+// epochs. It is drawn ABOVE the scale on purpose: a number from a recording that
+// lost most of its epochs to artifact should be read with that already in mind,
+// not discovered afterwards. The page reports the flags; it does not decide
+// whether a flagged recording is usable -- that policy is still open (README
+// open issue 2). Notes are inserted as textContent, never as HTML.
+function renderQC(qc){
+  const box = $("qc");
+  if (!qc){ box.hidden = true; return; }
+  box.querySelector(".qc-notes").replaceChildren(...(qc.notes || []).map(t => {
+    const li = document.createElement("li"); li.textContent = t; return li;
+  }));
+  box.classList.toggle("flagged", !!qc.flagged);
+  box.querySelector(".qc-head").textContent = qc.flagged
+    ? "Recording quality flagged — read this prediction with these in mind."
+    : "Recording quality: no flags raised.";
+  const rates = Object.entries(qc.conditions || {}).map(([k, c]) =>
+    `${k} ${(c.rejection_rate * 100).toFixed(1)}% rejected (${c.n_epochs_surviving} of ${c.n_epochs_recorded} kept)`
+  ).join(" · ");
+  box.querySelector(".qc-rates").textContent = rates ? "Epoch rejection: " + rates + "." : "";
+  box.hidden = false;
+}
+
 function render(r){
   drawScale();
   const p = r.predicted_class === "ADHD" ? r.confidence : 1 - r.confidence;
@@ -316,8 +358,10 @@ function render(r){
   $("klass").textContent = "probability of ADHD" +
     (r.predicted_class ? " — classed as " + r.predicted_class : "");
   $("nepochs").textContent = r.n_epochs_analyzed
-    ? `Averaged over ${r.n_epochs_analyzed.toLocaleString()} epochs from this recording.` : "";
+    ? `Averaged over ${r.n_epochs_analyzed.toLocaleString()} epochs: an evenly spaced subset ` +
+      `(at most 30 per condition) of those that survived artifact rejection.` : "";
   $("marker").style.left = (p * 100) + "%";
+  renderQC(r.quality_control);
 
   if (r.gradcam_overlay_png_base64){
     $("fig-cam").src = "data:image/png;base64," + r.gradcam_overlay_png_base64;
@@ -395,6 +439,19 @@ demoBtn.addEventListener("click", () => {
     n_epochs_analyzed: 60,
     classical_biomarkers: {tbr_ec: 1.27, tbr_eo: 0.75, tbr_vcpt: 1.19,
                            p300_latency_ms: null, p300_amplitude: null},
+    // Copied from a live /predict response for F12070157 (2026-10-16), so the
+    // worked example shows the quality block a real request returns. A clean
+    // recording: nothing flagged.
+    quality_control: {
+      conditions: {
+        EC:   {n_epochs_recorded: 227, n_epochs_surviving: 196, rejection_rate: 0.1366, high_rejection: false},
+        EO:   {n_epochs_recorded: 227, n_epochs_surviving: 224, rejection_rate: 0.0132, high_rejection: false},
+        VCPT: {n_epochs_recorded: 908, n_epochs_surviving: 818, rejection_rate: 0.0991, high_rejection: false}
+      },
+      ica: {EOEC: {n_components_excluded: 2, n_muscle_flagged: 3, capped: false},
+            VCPT: {n_components_excluded: 1, n_muscle_flagged: 2, capped: false}},
+      n_epochs_scored: 60, flagged: false, notes: []
+    },
     gradcam_overlay_png_base64: null
   });
   $("figures").hidden = true;

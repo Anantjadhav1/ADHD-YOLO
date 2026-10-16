@@ -24,6 +24,7 @@ from PIL import Image
 from training.classical_features import compute_classical_features
 from data_pipeline.image_conversion import generate_scalogram_image, SCALOGRAM_CHANNELS
 from data_pipeline.preprocessing import preprocess_subject
+from backend.app.quality import quality_control
 from interpretability.gradcam import GradCAM
 
 DISCLAIMER = (
@@ -121,6 +122,7 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
         "confidence": mean_prob_adhd if predicted_class == "ADHD" else 1 - mean_prob_adhd,
         "n_epochs_analyzed": len(probs_adhd),
         "classical_biomarkers": classical,
+        "quality_control": quality_control(result, len(probs_adhd)),
         "gradcam_overlay_png_base64": _image_to_base64(gc_result["overlay"]),
         "disclaimer": DISCLAIMER,
     }

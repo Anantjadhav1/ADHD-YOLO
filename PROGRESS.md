@@ -875,4 +875,44 @@ p(ADHD) medians: ADHD 0.466, Control 0.488. The groups span the same range (ADHD
 
 - **Next:** (1) email the dataset author about VCPT trigger coding, still the only route to a large legitimate change; (2) surface per-upload QC in the `/predict` response and on the dashboard (rejection rate per condition, `capped` flag), which turns the "Web: QC report" item into a concrete change and is the first step toward a policy for open issue 2; (3) positive control, Rest vs Task.
 
+### 2026-10-16 — per-upload QC is visible; the `capped` flag had been dead since the veto
+
+**`/predict` now returns a `quality_control` block, and the dashboard shows it.** Per condition: epochs recorded, epochs surviving, rejection rate, `high_rejection`. Per ICA pass: components excluded, muscle components flagged, `capped`. Plus EC/EO ambiguity, `n_epochs_scored`, a `flagged` boolean and plain-language `notes`. No change to `main.py`, which returns `run_inference()`'s dict whole.
+
+Two deliberate choices:
+- **It reports and does not decide.** The field is `flagged`, not `usable`: open issue 2 (include / exclude / flag) is still undecided, and an endpoint that silently enforced a policy nobody chose would be worse than one that enforces none.
+- **The dashboard draws it ABOVE the scale**, directly under the readout. A number from a recording that lost most of its epochs to artifact should be read with that already in mind, not discovered afterwards — the same lesson as the chance band. Clean recordings still get a line with their rejection rates, so "no flags" visibly means something. Notes go in via `textContent`, never `innerHTML`.
+
+The epochs line was also true but incomplete. "Averaged over 60 epochs from this recording" now says they are an evenly spaced subset, at most 30 per condition, of the epochs that *survived* rejection. For `C12031144` that is 30 of the 31 EC epochs that survived out of 219.
+
+**Bug found while verifying, fixed: `capped` reported False for every subject.** It was computed as `len(ica.exclude) >= MAX_ICA_COMPONENTS_EXCLUDED`. The topography veto runs *after* the cap and can strip most of what survived it, so the final exclude count no longer says whether the cap fired. Found because the live response said `capped: false` for `C12031144`, contradicting the 2026-09-26 entry above, which lists it among the five that hit the cap. Through the exact `/predict` path:
+
+```
+Muscle detection flagged 8 of 19 components; capped to 3 ... FLAG THIS SUBJECT FOR MANUAL QC
+Topography veto blocked 4 of 5 detected components
+n_detected 5 | n_vetoed 4 | n_excluded 1 | capped False
+```
+
+The function told the subject to be flagged for manual QC and recorded that it had not been. `docs/ica_alpha_full_veto.csv` has `capped=True` for **none of 108 subjects**, so the field built to carry over-contaminated subjects into the audit log has been dead since the veto was added. The five named on 2026-09-26 must have come from the warning text, which was always right. The comment above the field said "True when the cap fired" — intent correct, expression wrong once the veto existed.
+
+Fixed by recording `cap_fired` at the moment the cap fires, and adding `n_muscle_flagged`. **Only the diagnostic changed**: the exclude list and the cleaned signal are untouched, so no image, feature or result moves. Verified rather than argued — `C12031144` and `F12070157` re-run through `preprocess_subject()`: `n_excluded` and both rejection rates identical to the pre-fix run; `C12031144` now `capped: True` (`n_muscle_flagged` 8), `F12070157` stays False (3).
+
+One misstep on the way, recorded because it nearly produced a wrong fix: the first attempt to reproduce called `remove_artifacts_ica()` directly on a guessed input and got `n_excluded=0`, no cap warning — apparently refuting the hypothesis. It was the wrong path. Running `preprocess_subject()`, which is what `/predict` runs, reproduced it exactly.
+
+**Verification:**
+- Unit: five synthetic cases (clean, `C12031144`-like, ambiguous with VCPT, ambiguous with `alpha_ratio=None`, exactly 30%), all serialisable with `json.dumps(allow_nan=False)`, the strictness Starlette uses.
+- Live: a real uvicorn server, real EDF uploads over HTTP. Matches this log to the decimal — `C12031144` 85.8% EC / 72.6% EO, p(ADHD) 0.192 (0.19 on 2026-09-24); `F12070157` p(ADHD) 0.4961 and TBR identical to `classical_features_v3.csv`. `C12031144` returns three notes; `F12070157` none.
+- Browser: the worked example renders the clean block; the real `C12031144` response injected into the page's own `render()` renders the flagged block above the scale, no console errors, no horizontal overflow at 375 px. (A screenshot showed the needle at 0.48 against a readout of 0.19; it was the 0.4 s `left` transition caught mid-flight, and measured 0.192 once settled. Not a bug.)
+- The worked example now carries `F12070157`'s real QC values from a live response, so it shows what a real request returns.
+
+**Tests, so neither regresses silently.** The function lives in `backend/app/quality.py`, not `inference.py`, because `inference.py` pulls in `torch`, `pywt` and `mne_connectivity` transitively and CI installs none of them; verified that importing `quality.py` loads none of them. Two new files, 24 tests passing (13 before):
+- `tests/test_quality_control.py` (6): clean vs flagged, all three flag grounds on `C12031144`'s real values, `alpha_ratio=None`, VCPT present/absent, the threshold agreeing with `epoch_signal()`'s float comparison, and diagnostics that predate `n_muscle_flagged`. Every block is round-tripped through `json.dumps(allow_nan=False)`.
+- `tests/test_ica_capped.py` (5): fakes muscle detection, EOG detection and the veto to reproduce `C12031144`'s exact shape (muscle flags 8, cap keeps 5, veto leaves 1) on a synthetic Raw. **Run against the pre-fix code in a separate worktree, it fails exactly where it should** — `assert diag["capped"] is True` gets `False` — while the "cap fired" and `n_excluded == 1` assertions pass, so the fakes reproduce the real shape and only the broken field differs. A regression test that passes on the bug it guards would be worth nothing.
+
+**A wording detail kept honest.** `high_rejection` uses the same float comparison as `epoch_signal()` (`rate > 0.30`), so the API flag always agrees with what the pipeline logged. The cost: `1 - 70/100` is `0.30000000000000004`, so an exactly-30% recording is flagged, and the first draft printed "30.0% … above the 30% threshold". The note now says "at or above". Changing the comparison instead would have let the API and the audit log disagree.
+
+**Environment drift, recorded and not changed.** Installed `fastapi` is 0.103.0 (starlette 0.27.0) against a pinned 0.141.1, and nothing installed requires the older version. Starlette 0.27's `TestClient` passes `app=` to `httpx.Client`, which httpx 0.28 removed, so **every `TestClient`-based test is unrunnable in this environment** — the 2026-08-21 `/predict` verification method no longer works here. The live server is unaffected (uvicorn does not use `TestClient`), which is why the verification above used a real server. Left alone: changing the web framework under a working demo is its own change. `py -m pip install fastapi==0.141.1` realigns it with the pin.
+
+- **Next:** (1) email the dataset author about VCPT trigger coding — only the author can unblock this; (2) positive control, Rest vs Task — needs the scalogram images, which exist only on Colab/Drive; (3) cohort-wide re-count of `capped` with the fixed flag, the input open issue 2's policy actually needs; (4) align `fastapi` with its pin so `TestClient` tests run again.
+
 - **Next:** (1) the dashboard fix above; (2) email the dataset author about VCPT trigger coding; (3) positive control: Rest vs Task on the existing images, same folds and §6R split (not EC vs EO: 64 of 108 boundaries were located using alpha, so that task is circular); (4) EEG-native models via `braindecode`; (5) the Nasrabadi dataset and cross-dataset validation; (6) web: QC report, PDF export, public deployment; (7) the paper.
