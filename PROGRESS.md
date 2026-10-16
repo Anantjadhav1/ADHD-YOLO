@@ -915,4 +915,55 @@ One misstep on the way, recorded because it nearly produced a wrong fix: the fir
 
 - **Next:** (1) email the dataset author about VCPT trigger coding — only the author can unblock this; (2) positive control, Rest vs Task — needs the scalogram images, which exist only on Colab/Drive; (3) cohort-wide re-count of `capped` with the fixed flag, the input open issue 2's policy actually needs; (4) align `fastapi` with its pin so `TestClient` tests run again.
 
+### 2026-10-16b — positive control passes for the classical arm; the headline table was not on one cohort
+
+**The positive control did not need the images after all — for the classical arm.** `docs/classical_features_v3.csv` already holds every subject's EC, EO and VCPT features separately, so Rest vs Task runs in under a minute. Built `training/positive_control.py`, which imports `classical_baseline.run_cv` and calls it **unmodified**: same imputer, scaler, `SelectKBest`, RBF SVM, k and C chosen on the inner fold, same §6R three-way split, same manifest folds, development subjects only. `run_cv` hard-codes `y = group == "ADHD"`, so task rows go in labelled `"ADHD"` and rest rows `"Control"`, and everything is relabelled task/rest on the way out — changing the function under test would have defeated the point.
+
+Design choices, each for a stated reason:
+- **EO vs VCPT is the primary control.** Both eyes-open; both labels come from which *file* a row came from, not from alpha. EC vs EO stays excluded (64/108 boundaries alpha-located, circular). EC+EO vs VCPT, README's original wording, is run too but lets eye state help.
+- **Only the 100 features measured in both conditions.** Coherence exists for rest only; including it would let the classifier win on which columns are missing.
+- **Both rows of a child carry that child's split**, so the CV stays subject-wise — verified in `tests/test_positive_control.py`.
+- **Statistics respect the pairing.** Bootstrap resamples children; the permutation null flips rest/task *within* each child. Tested both ways: p < 0.01 when task beats rest inside every child despite large between-child spread, p > 0.05 when labels carry nothing.
+
+| | Rest (EO) vs Task | Rest (EC+EO) vs Task | ADHD vs Control, same code |
+|---|---|---|---|
+| subjects | 85 | 85 | 91 |
+| pooled AUC | **0.686** | **0.771** | 0.538 |
+| 95% CI | [0.637, 0.741] | [0.723, 0.815] | [0.416, 0.660] |
+| permutation p | 0.0002 | 0.0002 | 0.268 |
+| task above own rest | 68/85 (80%) | 71/85 (84%) | — |
+
+Every EO fold scores 0.62–0.78. **The classical null is about the data, not the code.**
+
+Two things that keep this honest rather than triumphant:
+1. **Part of what separates rest from task is artifact.** The strongest differences are task-related alpha suppression at Pz, P3 and C3 — textbook sites, textbook direction. But beta and gamma at Fp1, Fp2, F3 and F4 rise during the task, consistent with watching a screen and pressing a button; frontopolar gamma is EMG by this project's own measurement. The control passes, and shows the same confound family as the ADHD analysis operating where it should.
+2. **0.686 is modest for rest vs task, and that is informative.** 80% of children score higher on their own task row, but the classifier never knows whose row it is, and between-child variation dwarfs the within-child shift. ADHD vs Control is purely between-child. This is the clearest picture yet of why the main analysis finds nothing: an effect must be large *relative to how much children differ from each other*.
+
+The CNN arm still has no positive control; its images exist only on Colab.
+
+**Then the table this compares against turned out not to be on one cohort.** Writing the comparison column needed the classical arm's number, and PROGRESS disagreed with itself: 2026-09-11 says the 551-feature model went "0.517 → 0.538", the final table says 0.556, both with CI [0.416, 0.660] and p 0.268. Re-ran `classical_baseline.py` on v3 — bit-identical to the committed OOF file — and it pools over **91** subjects (44 / 47): **0.538**. 0.556 is the same model on the **84** subjects shared with the CNN arms. So:
+
+- the 551-feature row paired its 84-subject AUC with the CI and p of its 91-subject AUC;
+- the 301-feature row (0.517, [0.398, 0.640], 0.400) was entirely the 91-subject result, in a table headed "same 84 subjects";
+- the CNN rows' intervals came from Colab code not in the repo. The committed procedure does not reproduce them (scalogram p 0.311 published vs 0.364) and the gap is far beyond the ~0.007 Monte Carlo error of 5,000 permutations, so it is a different procedure, not noise.
+
+**Root cause was in the code, not the transcription.** `classical_baseline.py` printed the CNN numbers under "For reference on the same 84 subjects … These are directly comparable — same folds, same subjects". It pools over 91. The print now says so, and points at the fix.
+
+**The fix: `training/results_table.py`.** Regenerates every row that has an interval from the committed OOF files, restricted to the intersection, with `classical_baseline.main()`'s exact procedure (10,000 bootstrap resamples, 5,000 permutations, a fresh seed-42 RNG per arm). `tests/test_results_table.py` pins the 84-subject 42/42 cohort, the four AUCs, and — the important one — that this procedure reproduces `classical_baseline.py`'s own 91-subject output (0.538, [0.416, 0.660], 0.268) to three decimals, so the two scripts cannot drift apart.
+
+| arm | AUC (84) | 95% CI | p | previously published |
+|---|---|---|---|---|
+| CNN scalogram, frozen | 0.522 | [0.397, 0.650] | 0.364 | [0.397, 0.641], 0.311 |
+| CNN topomap, frozen | 0.523 | [0.396, 0.650] | 0.360 | [0.393, 0.647], 0.368 |
+| Classical, 301 | **0.522** | [0.399, 0.647] | 0.375 | 0.517 (on 91), [0.398, 0.640], 0.400 |
+| Classical, 551 | 0.556 | **[0.431, 0.682]** | **0.201** | [0.416, 0.660], 0.268 (on 91) |
+
+**No AUC on the 84 moved, every interval still contains 0.5, no conclusion changes** — and on the right cohort the 301-feature model and the scalogram CNN tie at 0.522. README's table, the dashboard's verdict (now "CI 0.40–0.65, p = 0.36") and the README's comparison with Rohani et al. are updated; this log's earlier entries are left as written, per the rule about recording rather than erasing. One more correction in passing: README compared "0.556 and 0.758", an AUC against an accuracy. It now says the classical arm on the 84 has AUC 0.556 and accuracy 0.571, against Rohani et al.'s 75.8% accuracy.
+
+**Two of my own errors, caught before commit:** the first draft of the positive-control comparison column quoted 0.556 against 91 subjects — the very mismatch being fixed — and the first draft of the corrected Rohani sentence quoted accuracy 0.55, which is the 91-subject figure, next to the 84-subject AUC. Both now use one cohort each. The pattern is easy to fall into because the two cohorts' numbers sit one line apart in every output.
+
+Also: `paired_comparison.csv` is unaffected — it was always computed on n = 84.
+
+- **Next:** (1) email the dataset author; (2) CNN-arm positive control — needs images; regenerating them locally is hours of CPU at a reduced epoch cap; (3) cohort-wide `capped` re-count with the fixed flag; (4) align `fastapi` with its pin.
+
 - **Next:** (1) the dashboard fix above; (2) email the dataset author about VCPT trigger coding; (3) positive control: Rest vs Task on the existing images, same folds and §6R split (not EC vs EO: 64 of 108 boundaries were located using alpha, so that task is circular); (4) EEG-native models via `braindecode`; (5) the Nasrabadi dataset and cross-dataset validation; (6) web: QC report, PDF export, public deployment; (7) the paper.

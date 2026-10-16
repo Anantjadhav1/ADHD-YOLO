@@ -171,13 +171,15 @@ Four arms across three method families, on the same 84 development subjects
 |---|---|---|---|
 | TBR (best condition, VCPT) | 0.550 | — | — |
 | CNN scalogram, full fine-tune | 0.503 | — | — |
-| CNN scalogram, frozen backbone | 0.522 | [0.397, 0.641] | 0.311 |
-| CNN topomap, frozen backbone | 0.523 | [0.393, 0.647] | 0.368 |
-| Classical SVM, 301 power features | 0.517 | [0.398, 0.640] | 0.400 |
-| Classical SVM, 551 features with coherence | **0.556** | [0.416, 0.660] | 0.268 |
+| CNN scalogram, frozen backbone | 0.522 | [0.397, 0.650] | 0.364 |
+| CNN topomap, frozen backbone | 0.523 | [0.396, 0.650] | 0.360 |
+| Classical SVM, 301 power features | 0.522 | [0.399, 0.647] | 0.375 |
+| Classical SVM, 551 features with coherence | **0.556** | [0.431, 0.682] | 0.201 |
 | Fusion (CNN + classical) | 0.548 | — | — |
 
-Every confidence interval contains 0.5. Baselines to beat were 0.758 and 0.845.
+Every confidence interval contains 0.5. Baselines to beat were 0.758 and 0.845 (Rohani et al.'s *accuracies*; these are AUCs).
+
+The four rows with intervals regenerate from the committed out-of-fold files with `py -m training.results_table`: same 84 subjects, one procedure (10,000 bootstrap resamples, 5,000 permutations, seed 42 per arm), pinned by `tests/test_results_table.py`. **Corrected 2026-10-16.** The table always said "same 84 subjects", but the classical rows came from 91 (44 ADHD / 47 Control): the 301-feature row was entirely the 91-subject result (0.517, [0.398, 0.640], 0.400), and the 551-feature row paired its 84-subject AUC (0.556) with the CI and p of its 91-subject AUC (0.538). The CNN rows' intervals had been computed on Colab by code that is not in the repo and could not be regenerated. No AUC on the 84 changed, every interval still contains 0.5, and no conclusion moves. On the right cohort the 301-feature classical model and the scalogram CNN score the same, 0.522.
 
 Paired tests between arms — far more powerful than comparing intervals, because
 both models are scored on the same subjects — find no significant difference
@@ -244,12 +246,36 @@ and subject-wise cross-validation will reward it, as long as restlessness is
 stable within a subject. That is a more useful explanation than assuming
 carelessness.
 
+### Positive control: the classical pipeline finds a difference that exists
+
+A null result is only about the data if the same code can detect a difference known to be there. Rest vs Task is that difference: the same children, recorded at rest and during the VCPT Go/NoGo task. `training/positive_control.py` runs it through the classical arm's **own** `run_cv`, imported unmodified — same imputer, scaler, `SelectKBest`, RBF SVM, same §6R three-way split, same subject folds, development subjects only, both rows of a child always in the same fold.
+
+| | Rest (EO) vs Task | Rest (EC+EO) vs Task | ADHD vs Control, same code |
+|---|---|---|---|
+| subjects | 85 | 85 | 91 |
+| pooled AUC | **0.686** | **0.771** | 0.538 |
+| 95% CI (subject bootstrap) | [0.637, 0.741] | [0.723, 0.815] | [0.416, 0.660] |
+| permutation p | 0.0002 | 0.0002 | 0.268 |
+| task scored above the child's own rest | 68/85 (80%) | 71/85 (84%) | — |
+
+The right-hand column is the 551-feature classical model on every development subject it covers, as `classical_baseline.py` reports it — the like-for-like comparison, since the positive control also uses every development subject with the data it needs. (On the 84-subject cohort shared with the CNN arms the same model scores 0.556; see the corrected table above.)
+
+EO vs VCPT is the primary control: both eyes-open, both labelled by which file a row came from rather than by alpha. EC+EO lets eye state help, which is why it scores higher. Only the 100 features measured in both conditions are used; coherence exists for rest only and would let the classifier separate the classes by which columns are missing. The bootstrap resamples children and the permutation null flips rest/task *within* each child, because a child's two rows are not independent.
+
+**What separates rest from task is partly physiology and partly artifact.** The strongest single differences are textbook task-related alpha suppression at Pz, P3 and C3 — the right sites, the right direction. Alongside them, beta and gamma at Fp1, Fp2, F3 and F4 rise during the task, which is consistent with the muscle activity of watching a screen and pressing a button; this project already established that frontopolar gamma is EMG. So the control passes, and it also shows the same confound family found in the ADHD analysis operating where it is expected.
+
+**Why 0.686 is modest for rest vs task, and why that matters.** 80% of children score higher on their own task row than their own rest row, but the classifier is never told whose row it is, and between-child variation in band power is large next to the within-child shift. ADHD vs Control is *purely* a between-child comparison. An effect has to be large relative to how much children differ from each other to be seen at all, and the positive control shows how much a real within-child effect is diluted by that.
+
+The CNN arm has no positive control yet: its images exist only on Colab.
+
 ### What this establishes, and what it does not
 
 **Establishes:** on 84 subjects, neither a transfer-learned CNN on EEG-derived
 images nor an SVM on 551 engineered features discriminates ADHD from Control.
 Two image representations, two capacity settings, and three feature families
-spanning spectral power, aperiodic activity and connectivity.
+spanning spectral power, aperiodic activity and connectivity. For the classical
+arm, the code is not the reason: the identical `run_cv` separates rest from task
+(AUC 0.686, CI [0.637, 0.741], p = 0.0002).
 
 **Does not establish:** that EEG carries no signal, that a different
 architecture would fail, or that this holds at n=500. It is a bounded negative
@@ -262,14 +288,15 @@ comparisons all agree.
 al. used 826 features including event-related potentials and task performance;
 the VCPT trigger channel in this dataset does not encode the stimulus conditions
 needed to compute them. That remains the single most plausible explanation for
-the gap between 0.556 and 0.758.
+the gap between this project's classical arm (on the 84-subject cohort: AUC
+0.556, accuracy 0.571) and Rohani et al.'s 75.8% accuracy.
 
 ## What's next
 
 Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the two things that could still change the result, and at the product.
 
 1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August. Rohani et al. used 826 features including P300 and behavioural measures, which need the trigger coding. This is the only route where a large, legitimate jump is plausible.
-2. **Positive control: Rest vs Task** on the existing images (EC+EO vs VCPT, same folds, same §6R split). If the pipeline that scores 0.52 on ADHD scores high here, the null result is about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
+2. **Positive control for the CNN arm.** Done for the classical arm (2026-10-16): AUC 0.686 on Rest (EO) vs Task through the identical `run_cv`, so the classical null is about the data. The CNN arm still needs one, on the images (same folds, same §6R split); its pipeline is the more complex one (image encoding, fold assembly, label indexing, aggregation), so it is the one more worth checking. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
 3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
 4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
 5. **Web:** PDF export, public deployment. *(Per-upload quality-control report: done 2026-10-16.)*

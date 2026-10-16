@@ -1,0 +1,2 @@
+rest,n_subjects,n_features,pooled_auc,ci_low,ci_high,perm_p,task_gt_rest,n_pairs
+eo,85,100,0.6860207612456748,0.6370934256055363,0.7407647058823529,0.0001999600079984003,68,85
