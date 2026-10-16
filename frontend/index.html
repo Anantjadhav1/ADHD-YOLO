@@ -128,6 +128,29 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
       vertical-align:-.1em;margin-right:.5rem}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+
+/* ---- printed report ("Save report as PDF") ---- */
+.print-only{display:none}
+.report-actions{margin-top:1.5rem}
+@media print{
+  @page{margin:14mm}
+  body{background:#fff;background-image:none;font-size:10.5pt}
+  /* Keep a little side padding: the scale's 0.0 and 1.0 labels are centred
+     on the end ticks, so with none they hang half off the printable area. */
+  .wrap{max-width:none;padding:0 1.25rem;border-left:none}
+  header{padding:0 0 1rem}
+  section{padding:1rem 0}
+  /* The upload form, buttons and transient status are interface, not report. */
+  #upload,#status,button,.no-print{display:none !important}
+  .print-only{display:block}
+  .qc,.scale,.verdict,figure,table{break-inside:avoid}
+  /* The scale track, the reference dots and the needle are all drawn with CSS
+     backgrounds, which browsers drop when printing unless told otherwise --
+     without this the hero of the report prints as an empty box. Same for the
+     flagged-QC tint, whose colour is part of the message. */
+  .scale,.scale *,.qc.flagged{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .marker{transition:none}
+}
 </style>
 </head>
 <body>
@@ -145,7 +168,7 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
   prediction falls among children whose diagnosis is known.</p>
 </header>
 
-<section>
+<section id="upload">
   <h2>Analyse a recording</h2>
   <div class="drop" id="drop">
     <div class="filerow">
@@ -170,6 +193,9 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
 
 <section id="results" hidden>
   <h2>Result</h2>
+  <!-- Print only: what this report was generated from, and when. A saved PDF
+       outlives the page, so it has to say where its numbers came from. -->
+  <p class="print-only small muted" id="report-meta"></p>
   <div id="status" class="status" hidden><p></p></div>
 
   <div class="readout">
@@ -205,6 +231,12 @@ caption{text-align:left;font-size:.8125rem;color:var(--ink-soft);padding-bottom:
     image representations, two capacity settings, a 551-feature classical model and a fusion of
     both — all land at chance. Any single prediction from this system should be read as a coin
     flip.</p>
+  </div>
+
+  <div class="report-actions actions no-print">
+    <button id="pdf" class="ghost" type="button">Save report as PDF</button>
+    <span class="small muted">Opens the print dialog; choose “Save as PDF”. The report keeps the
+    quality flags, the reference strips and this verdict.</span>
   </div>
 </section>
 
@@ -389,6 +421,21 @@ function render(r){
   results.scrollIntoView({behavior:"smooth", block:"start"});
 }
 
+// ---- printed report ----
+// Saving goes through the browser's own print-to-PDF: no dependency, no build
+// step, and the report is exactly the page the reader just looked at, with the
+// interface removed by the print stylesheet.
+let reportSource = "";
+const savedTitle = document.title;
+window.addEventListener("beforeprint", () => {
+  const when = new Date().toLocaleString();
+  $("report-meta").textContent = `${reportSource || "Result"} · generated ${when}`;
+  // Browsers offer document.title as the PDF's file name.
+  document.title = "ADHD-YOLO report - " + new Date().toISOString().slice(0, 10);
+});
+window.addEventListener("afterprint", () => { document.title = savedTitle; });
+$("pdf").addEventListener("click", () => window.print());
+
 runBtn.addEventListener("click", async () => {
   const fd = new FormData();
   fd.append("eoec_file", eoec.files[0]);
@@ -414,6 +461,8 @@ runBtn.addEventListener("click", async () => {
         (d.detail || `The server returned ${res.status}.`), true);
     }
     status.hidden = true;
+    reportSource = "Uploaded recording: " + eoec.files[0].name +
+      (vcpt.files.length ? " + " + vcpt.files[0].name : " (no task recording)");
     render(await res.json());
   } catch(e){
     say("<strong>No response from the backend.</strong> Start it with " +
@@ -433,6 +482,7 @@ runBtn.addEventListener("click", async () => {
 // prediction in the middle of both strips is what this model does.
 demoBtn.addEventListener("click", () => {
   status.hidden = true;
+  reportSource = "Worked example: F12070157, stored results (no backend was called)";
   render({
     predicted_class: "Control",
     confidence: 0.5039,

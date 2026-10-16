@@ -299,7 +299,7 @@ Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the
 2. **Positive control for the CNN arm.** Done for the classical arm (2026-10-16): AUC 0.686 on Rest (EO) vs Task through the identical `run_cv`, so the classical null is about the data. The CNN arm still needs one, on the images (same folds, same §6R split); its pipeline is the more complex one (image encoding, fold assembly, label indexing, aggregation), so it is the one more worth checking. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
 3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
 4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
-5. **Web:** PDF export, public deployment. *(Per-upload quality-control report: done 2026-10-16.)*
+5. **Web:** public deployment. *(Per-upload quality-control report and PDF export: done 2026-10-16.)*
 6. **Paper.**
 
 ---
@@ -387,6 +387,8 @@ Then open `frontend\index.html` in a browser and upload an EOEC `.edf`. `http://
 - **Demo only on held-out test subjects** (listed as `test` in `data_pipeline/splits/subject_splits.csv`). This checkpoint trained on folds 2–4 and selected its epoch on fold 1; test subjects are unseen by every model in the project. Its own held-out AUC on fold 0 was 0.486.
 - **Leave VCPT empty for a fast demo.** The CNN uses EC/EO only; a VCPT upload adds a second ICA pass and changes only the biomarker table, not the prediction. `F12070157` (ADHD, the worked example) is a clean test recording. Avoid `C12031144` as a showcase: it is fast only because it has no VCPT, and it is one of the worst recordings in the cohort (85.8% of EC and 72.6% of EO epochs rejected, muscle cap hit). If it is uploaded, the dashboard now says so above the scale.
 - Each request classifies 30 evenly spaced epochs per condition.
+- **Recording quality is shown above the scale.** Rejection rate per condition, whether the ICA muscle cap fired, and EC/EO ambiguity, from the same preprocessing that produced the scored epochs. A flagged recording is reported, not refused: the include/exclude policy is still open.
+- **"Save report as PDF"** under the verdict uses the browser's print-to-PDF. The report drops the upload form and buttons and keeps the source file name, time, quality flags, reference strips, verdict and disclaimer.
 - **Any single prediction is uninformative.** Pooled AUC is 0.52. The dashboard places each prediction among 36 reference children scored the same way, so this is visible on the page rather than asserted.
 
 ## Workflow
