@@ -54,6 +54,30 @@ DEFAULT_BOUNDARIES_CSV = "docs/ec_eo_boundaries_postica.csv"
 
 LOG_FIELDS = ["subject_id", "group", "split", "status", "n_ec", "n_eo", "n_vcpt",
               "split_rule", "boundary_frac", "detail"]
+# Per-subject quality control, recorded from the same preprocess_subject() call
+# that produced the images. Before 2026-10-16 this log had no QC at all, so a
+# cohort-wide count of high-rejection or ICA-capped subjects -- the input README
+# open issue 2's include/exclude/flag policy needs -- meant re-running ICA on
+# every subject separately. Appended rather than inserted, and merged with "" for
+# older rows, so an existing build_log.csv stays readable.
+QC_FIELDS = ["rej_ec", "rej_eo", "rej_vcpt", "capped_eoec", "capped_vcpt",
+             "muscle_flagged_eoec", "muscle_flagged_vcpt", "eoec_ambiguous"]
+LOG_FIELDS = LOG_FIELDS + QC_FIELDS
+
+
+def _qc_fields(result: dict) -> dict:
+    """Pull the QC diagnostics out of a preprocess_subject() result. Missing
+    conditions (no VCPT recording) stay None, which the log writes as ""."""
+    out = {}
+    for cond in ("ec", "eo", "vcpt"):
+        diag = result.get(f"reject_{cond}")
+        out[f"rej_{cond}"] = None if not diag else round(float(diag["rejection_rate"]), 4)
+    for name in ("eoec", "vcpt"):
+        diag = result.get(f"ica_{name}")
+        out[f"capped_{name}"] = None if not diag else bool(diag["capped"])
+        out[f"muscle_flagged_{name}"] = None if not diag else int(diag.get("n_muscle_flagged", 0))
+    out["eoec_ambiguous"] = bool(result.get("eoec_ambiguous", False))
+    return out
 
 
 def load_boundaries(path: str) -> dict:
@@ -102,6 +126,7 @@ class SubjectResult:
     split_rule: str = ""       # "midpoint" | "detected" -- never leave this blank
     boundary_frac: float | None = None
     detail: str = ""
+    qc: dict | None = None     # _qc_fields(); None when preprocessing itself failed
 
 
 def run_subject(
@@ -137,11 +162,12 @@ def run_subject(
 
     rule = result.get("split_rule", "midpoint")
     bfrac = result.get("boundary_frac")
+    qc = _qc_fields(result)
 
     if result["eoec_ambiguous"] and not include_ambiguous:
         return SubjectResult(
             subject_id, group, split, "skipped_ambiguous",
-            split_rule=rule, boundary_frac=bfrac,
+            split_rule=rule, boundary_frac=bfrac, qc=qc,
             detail=f"alpha_ratio={result['alpha_ratio']:.2f} -- flagged for manual QC, not auto-processed",
         )
 
@@ -161,13 +187,13 @@ def run_subject(
         )
     except Exception as e:
         return SubjectResult(subject_id, group, split, "failed",
-                             split_rule=rule, boundary_frac=bfrac,
+                             split_rule=rule, boundary_frac=bfrac, qc=qc,
                              detail=f"image generation failed: {e!r}")
 
     return SubjectResult(
         subject_id, group, split, "ok",
         n_ec=counts.get("EC", 0), n_eo=counts.get("EO", 0), n_vcpt=counts.get("VCPT", 0),
-        split_rule=rule, boundary_frac=bfrac,
+        split_rule=rule, boundary_frac=bfrac, qc=qc,
         detail=f"alpha_ratio={result['alpha_ratio']:.2f}",
     )
 
@@ -207,11 +233,17 @@ def run_batch(
                              include_ambiguous, boundary_frac=boundaries.get(subject_id))
         print(result.status + (f" ({result.detail})" if result.status != "ok" else ""))
         results.append(result)
+        # Saved after EVERY subject, not once at the end. A full-cohort run is
+        # hours of CPU; written only on completion, an interruption at subject
+        # 100 lost the record of the 99 before it (images survive, provenance
+        # does not). save_log merges by subject_id, so repeated calls are
+        # idempotent and the final save in main() writes the same file.
+        save_log([result], output_dir, quiet=True)
 
     return results
 
 
-def save_log(results: list[SubjectResult], output_dir: str) -> str:
+def save_log(results: list[SubjectResult], output_dir: str, quiet: bool = False) -> str:
     """
     MERGE into build_log.csv -- never truncate it.
 
@@ -241,6 +273,7 @@ def save_log(results: list[SubjectResult], output_dir: str) -> str:
             "split_rule": r.split_rule,
             "boundary_frac": "" if r.boundary_frac is None else f"{r.boundary_frac:.4f}",
             "detail": r.detail,
+            **{k: ("" if (r.qc or {}).get(k) is None else (r.qc or {})[k]) for k in QC_FIELDS},
         }
 
     with open(log_path, "w", newline="") as f:
@@ -249,6 +282,8 @@ def save_log(results: list[SubjectResult], output_dir: str) -> str:
         for sid in sorted(existing):
             writer.writerow(existing[sid])
 
+    if quiet:
+        return log_path
     print(f"  build_log.csv now holds {len(existing)} subjects "
           f"({len(results)} updated by this run)")
     return log_path
