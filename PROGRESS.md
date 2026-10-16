@@ -1015,3 +1015,40 @@ The published `fusion_classifier.py` is unchanged, so the published number stays
 **What would settle it** is a model fixed in advance and data it has never seen. The 17-subject held-out split is untouched but too small: at n = 17 an AUC near 0.6 has a CI of roughly ±0.25, so it can neither confirm nor refute. An external cohort (Nasrabadi et al., `PROJECT.md` §3) could. Spending the held-out split is a decision for the project's author, not for an automated session, and was not done.
 
 - **Next:** (1) email the dataset author; (2) CNN-arm positive control — images still generating; (3) cohort-wide `capped` re-count from the new build-log columns; (4) decide whether the post-hoc linear model is worth a pre-specified test on an external cohort.
+
+### 2026-10-16e — QC across the whole cohort: most subjects are flagged, and excluding them changes nothing
+
+The four-shard build finished: all 108 subjects `ok`, 12,624 scalograms and 12,624 topomaps at 40 epochs per condition, ~2.6 h of CPU. The merged `build_log.csv` carries the new QC columns; the extract is committed as `docs/qc_audit.csv`.
+
+**What the corrected flags show** (108 subjects, 100 with VCPT):
+
+| | subjects |
+|---|---|
+| ICA muscle cap fired, either pass | **27** (EOEC 15, VCPT 19) — the old field said 0 |
+| >30% epochs rejected, EC / EO / VCPT | 56 / 21 / 24 |
+| >30% in any condition | 65 |
+| EC/EO ambiguous | 10 |
+| flagged on any ground | **78** |
+
+Rejection percentiles (p50 / p75 / p90 / p95): EC 31 / 43 / 63 / 68%, EO 15 / 27 / 45 / 58%, VCPT 18 / 29 / 45 / 64%. **The 30% warning was a convention, never measured, and in EC it sits at the median** — it flags half the cohort and so distinguishes nothing. This is norm #3 again, for a flag rather than a rejection threshold.
+
+**Group differences.** Cap fired 15/52 ADHD vs 12/56 Control (Fisher p = 0.39). Median rejection ADHD vs Control: EC 35.1% vs 25.6% (Mann–Whitney p = 0.10), EO 13.4% vs 15.6% (p = 0.93), VCPT 19.4% vs 17.7% (p = 0.61). The EC trend is not significant but points the way the movement confound would: more eyes-closed data lost from the ADHD children.
+
+**What drives rejection** (`rejection_audit.csv`, an earlier pipeline state, so indicative): the worst channel is Fp1/Fp2 or F7/F8 for most subjects in both conditions — ocular and frontal muscle — and O1/O2 for 23 subjects in EC, i.e. eyes-closed alpha itself crossing 250 µV. That is the bias the 2026-08-24c threshold choice set out to avoid, still present in a minority.
+
+**Does excluding flagged subjects change the result? No.** `training/qc_sensitivity.py` applies four policies to the FIXED out-of-fold predictions (models were trained with everyone; only the scored set changes — a different question from retraining without them):
+
+| policy | n (ADHD) | CNN scalogram | CNN topomap | engineered 551 |
+|---|---|---|---|---|
+| none (as reported) | 84 (42) | 0.522 [0.397, 0.650] | 0.523 [0.396, 0.650] | 0.556 [0.431, 0.682] |
+| drop ICA-cap subjects | 63 (31) | 0.549 [0.403, 0.694] | 0.514 [0.363, 0.659] | 0.498 [0.348, 0.643] |
+| drop top-decile rejection | 65 (30) | 0.540 [0.398, 0.679] | 0.562 [0.411, 0.708] | 0.621 [0.480, 0.757] |
+| drop either | 52 (24) | 0.598 [0.433, 0.754] | 0.561 [0.391, 0.723] | 0.586 [0.423, 0.742] |
+
+Every interval contains 0.5; the AUCs move in both directions; intervals widen as subjects are removed. One cell has p = 0.048 (engineered, top decile dropped) — one in twelve, which is what chance gives at 0.05. The "none" row reproduces the headline table exactly, which anchors the comparison; `tests/test_qc_sensitivity.py` pins that and the policy counts.
+
+**Consequence for open issue 2.** Since no reasonable policy changes the conclusion, the choice can be made on principle. Recommended, not imposed: keep every subject in the primary analysis and cite this table as the sensitivity analysis; move the per-upload warning from 30% to the measured tails (EC 63%, EO/VCPT 45%) so the dashboard flags outliers rather than half the cohort. `HIGH_REJECTION_RATE_WARN` is left at 0.30 pending that decision.
+
+`F09080101`, flagged for manual inspection since August: at the current threshold (0.9) muscle detection flags 7 components and the cap fires; rejection is 17% / 13% / 22%. A capped decomposition, not a lost recording.
+
+- **Next:** CNN-arm positive control is training (fold 0, epoch 1: image-level inner-fold accuracy 58.6%).
