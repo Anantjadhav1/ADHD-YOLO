@@ -338,12 +338,25 @@ def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
         warnings.warn("No EOG proxy channels present; skipping blink detection.")
 
         muscle_idx = []
+    # Whether the cap fired is recorded HERE, at the moment it fires, not
+    # inferred afterwards from the final exclude count. The topography veto
+    # below runs AFTER the cap and can strip most of what survived it, so
+    # len(ica.exclude) no longer says whether the cap fired. The old
+    # `len(ica.exclude) >= MAX_ICA_COMPONENTS_EXCLUDED` therefore reported
+    # capped=False for subjects this function had just told to FLAG FOR
+    # MANUAL QC -- e.g. C12031144: muscle flagged 8 of 19, capped to 3, veto
+    # then blocked 4 of 5 detected, 1 excluded, capped=False. Across all 108
+    # subjects in docs/ica_alpha_full_veto.csv it was True for none, so the
+    # flag was dead from the moment the veto was added.
+    cap_fired, n_muscle_flagged = False, 0
     try:
         muscle_idx, muscle_scores = ica.find_bads_muscle(
             raw_for_fit, threshold=MUSCLE_THRESHOLD, verbose=False)
+        n_muscle_flagged = len(muscle_idx)
         # Cap by score, keeping the strongest. EOG is never capped.
         allowed = max(0, MAX_ICA_COMPONENTS_EXCLUDED - len(exclude))
         if len(muscle_idx) > allowed:
+            cap_fired = True
             ranked = sorted(muscle_idx, key=lambda i: abs(muscle_scores[i]), reverse=True)
             capped_out = ranked[allowed:]
             muscle_idx = ranked[:allowed]
@@ -383,8 +396,11 @@ def remove_artifacts_ica(raw: mne.io.Raw, n_components: int = 19,
         "eog_proxy_used": proxies,
         "muscle_threshold": MUSCLE_THRESHOLD,
         # True when the cap fired -- carry this into the audit log so
-        # over-contaminated subjects can be reviewed before Phase 2.
-        "capped": len(ica.exclude) >= MAX_ICA_COMPONENTS_EXCLUDED,
+        # over-contaminated subjects can be reviewed. Set where the cap fires
+        # (cap_fired above): the final exclude count cannot tell you, because
+        # the topography veto runs after the cap.
+        "capped": cap_fired,
+        "n_muscle_flagged": n_muscle_flagged,
         "n_detected": len(detected),
         "n_vetoed": len(vetoed),
         "vetoed": {int(i): r for i, r in sorted(vetoed.items())},
