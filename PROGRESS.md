@@ -1052,3 +1052,26 @@ Every interval contains 0.5; the AUCs move in both directions; intervals widen a
 `F09080101`, flagged for manual inspection since August: at the current threshold (0.9) muscle detection flags 7 components and the cap fires; rejection is 17% / 13% / 22%. A capped decomposition, not a lost recording.
 
 - **Next:** CNN-arm positive control is training (fold 0, epoch 1: image-level inner-fold accuracy 58.6%).
+
+### 2026-10-16f — the CNN arm passes its positive control
+
+`py -m training.positive_control_cnn --images-root D:/adhd-yolo-work/images_all` — scalograms, Rest (EO) vs Task, 79 children (the CNN arm's 84 minus the 5 without a task recording), 158 units, 6,320 images; ~80 min on CPU.
+
+| | CNN scalogram | classical (2026-10-16b) |
+|---|---|---|
+| pooled AUC | **0.633** | 0.686 |
+| 95% CI (children) | [0.582, 0.686] | [0.637, 0.741] |
+| permutation p (within child) | 0.0002 | 0.0002 |
+| task above own rest | 64/79 (81%) | 68/85 (80%) |
+| fold AUCs | 0.633, 0.737, 0.631, 0.587, 0.645 | 0.784, 0.698, 0.658, 0.619, 0.747 |
+
+**Both arms' training code finds a difference that exists; neither finds ADHD.** The CNN null (0.522) is about the data, as the classical one is.
+
+Checked rather than assumed: every fold's `args.yaml` has freeze 8, patience 5, seed 42 and every augmentation key at its disabled value (`run_cv` also asserts this itself); early stopping ended the folds at 16, 7, 8, 7 and 6 epochs; the OOF table has all 158 units, 79 rest and 79 task, one row each.
+
+Three readings worth keeping:
+1. **A harder test than the ADHD run, and it still passes.** 40 epochs per condition against 300.
+2. **It cannot be the frontopolar artifact.** The scalogram carries Fz, Cz, Pz, F3, F4 only; Fp1/Fp2, where the classical control's beta/gamma rise was largest, are not in the image. F3/F4 still carry some task-related muscle, so "physiology only" would overclaim, but parietal alpha suppression is within view.
+3. **Probabilities are uncalibrated across folds.** At 0.5, sensitivity/specificity run from 0.31/0.94 (fold 0) to 0.87/0.27 (fold 2); the ranking is consistent, the operating point is not. Expected with a frozen backbone and a per-fold linear head; irrelevant to AUC, relevant to anyone reading the dashboard's "classed as" line.
+
+**In progress:** the same control on topomaps. Its pipeline differs from the scalogram's only in image generation, so it tests the one CNN component not yet covered.

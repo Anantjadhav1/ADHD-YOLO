@@ -294,16 +294,27 @@ EO vs VCPT is the primary control: both eyes-open, both labelled by which file a
 
 **Why 0.686 is modest for rest vs task, and why that matters.** 80% of children score higher on their own task row than their own rest row, but the classifier is never told whose row it is, and between-child variation in band power is large next to the within-child shift. ADHD vs Control is *purely* a between-child comparison. An effect has to be large relative to how much children differ from each other to be seen at all, and the positive control shows how much a real within-child effect is diluted by that.
 
-The CNN arm has no positive control yet: its images exist only on Colab.
+**The CNN arm passes too.** `training/positive_control_cnn.py` feeds `train_yolo_cls.run_cv` — imported unmodified: frozen backbone, patience 5, augmentation disabled, §6R split — with the same children's scalograms filed by condition (task under the class run_cv calls "ADHD", rest under "Control"), each child as two units in its own fold. Cohort: the 79 of the CNN arm's 84 children who have a task recording.
+
+| | CNN scalogram, Rest (EO) vs Task | CNN scalogram, ADHD vs Control |
+|---|---|---|
+| children | 79 | 84 |
+| pooled AUC | **0.633** | 0.522 |
+| 95% CI | [0.582, 0.686] | [0.397, 0.650] |
+| permutation p | 0.0002 | 0.364 |
+| task scored above the child's own rest | 64/79 (81%) | — |
+| fold AUCs | 0.587–0.737 | — |
+
+Image encoding, fold assembly, Ultralytics' class indexing and epoch-to-subject aggregation all work: **the CNN's null on ADHD is about the data too.** These images were built at 40 epochs per condition against the ADHD run's 300, which should make the control harder, not easier. The scalogram carries only Fz, Cz, Pz, F3 and F4, so this separation cannot rest on the frontopolar muscle signal that helped the classical control, though F3/F4 still see some. Thresholded at 0.5, sensitivity and specificity swing between folds (0.31/0.94 to 0.87/0.27) — the probabilities are not calibrated across folds, which the AUC is indifferent to.
 
 ### What this establishes, and what it does not
 
 **Establishes:** on 84 subjects, neither a transfer-learned CNN on EEG-derived
 images nor an SVM on 551 engineered features discriminates ADHD from Control.
 Two image representations, two capacity settings, and three feature families
-spanning spectral power, aperiodic activity and connectivity. For the classical
-arm, the code is not the reason: the identical `run_cv` separates rest from task
-(AUC 0.686, CI [0.637, 0.741], p = 0.0002).
+spanning spectral power, aperiodic activity and connectivity. The code is not the
+reason: the identical training code separates rest from task in the same children
+(classical AUC 0.686, CNN scalogram AUC 0.633, both p = 0.0002).
 
 **Does not establish:** that EEG carries no signal, that a different
 architecture would fail, or that this holds at n=500. It is a bounded negative
@@ -324,7 +335,7 @@ the gap between this project's classical arm (on the 84-subject cohort: AUC
 Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the two things that could still change the result, and at the product.
 
 1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August. Rohani et al. used 826 features including P300 and behavioural measures, which need the trigger coding. This is the only route where a large, legitimate jump is plausible.
-2. **Positive control for the CNN arm.** Done for the classical arm (2026-10-16): AUC 0.686 on Rest (EO) vs Task through the identical `run_cv`, so the classical null is about the data. The CNN arm still needs one, on the images (same folds, same §6R split); its pipeline is the more complex one (image encoding, fold assembly, label indexing, aggregation), so it is the one more worth checking. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
+2. **Positive controls: done** (2026-10-16). Rest (EO) vs Task through each arm's own unmodified training code: classical AUC 0.686, CNN scalogram 0.633, both p = 0.0002. Both nulls on ADHD are about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
 3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
 4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
 5. **Web:** public deployment. *(Per-upload quality-control report and PDF export: done 2026-10-16.)*

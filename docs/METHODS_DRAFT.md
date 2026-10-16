@@ -93,7 +93,7 @@ Specified after the results above were known, so reported separately and not in 
 
 To establish that a null result reflects the data rather than the pipeline, the engineered-feature arm's own `run_cv` was applied unmodified to **rest vs task** in the same children: one row per child per condition, both rows in the child's fold, development subjects only, the 100 features measured in both conditions (coherence is rest-only and would let the classifier separate the classes by missing columns). Primary contrast EO vs VCPT — both eyes-open, both labelled by recording rather than by alpha; EC+EO vs VCPT reported as secondary. The bootstrap resamples children and the permutation null flips rest/task within each child.
 
-The CNN arm's positive control (`training/positive_control_cnn.py`) uses the same construction through `train_yolo_cls.run_cv`, on the 84-subject CNN cohort, with images built at 40 epochs per condition **[result pending]**.
+The CNN arm's positive control (`training/positive_control_cnn.py`) uses the same construction through `train_yolo_cls.run_cv`, called unmodified, on the 79 children of the 84-subject CNN cohort who have a task recording, with images built at 40 epochs per condition: each child contributes a rest unit and a task unit in its own fold. Results: engineered features AUC 0.686 (95% CI 0.637–0.741; 85 children), CNN scalogram AUC 0.633 (0.582–0.686; 79 children); within-child permutation p = 0.0002 for both; the task recording scored above the same child's rest recording in 80% and 81% of children.
 
 ## 9. Quality control
 
