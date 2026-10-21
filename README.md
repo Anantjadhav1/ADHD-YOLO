@@ -351,7 +351,8 @@ Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the
 3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
 4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
 5. **Web:** public deployment. *(Per-upload quality-control report and PDF export: done 2026-10-16.)*
-6. **Paper.** A methods scaffold, every parameter read from the code and gaps marked **[verify]**, is in `docs/METHODS_DRAFT.md`.
+6. **Pre-registered next analyses** (`docs/PREREGISTRATION.md`, 2026-10-21): replication and transfer on the Nasrabadi cohort, a Riemannian representation, and a one-shot estimate on the held-out split — fixed before the new data are seen.
+7. **Paper.** A methods scaffold, every parameter read from the code and gaps marked **[verify]**, is in `docs/METHODS_DRAFT.md`.
 
 ---
 

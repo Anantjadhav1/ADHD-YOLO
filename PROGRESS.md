@@ -1093,3 +1093,16 @@ All three arms are now validated on the same contrast:
 **Commit attribution.** The 12 commits of 2026-10-16 carried a `Co-Authored-By: Claude` trailer. At the author's request they were rewritten to remove it (`git filter-branch --msg-filter`, trailer line only; files verified identical to the pre-rewrite tree, author and dates unchanged) and force-pushed after temporarily allowing force pushes on `main`. All 12 hashes changed; no document in the repo cited them. Any clone made before 2026-10-21 should be re-cloned rather than pulled.
 
 **CI was red from 2026-10-16 (`linear_sensitivity` commit) to 2026-10-21, unnoticed.** `tests/test_linear_sensitivity.py` reaches `load_manifest()` through `run_fusion_cv()`, and the manifest's relative EDF paths need `ADHD_YOLO_DATA_ROOT`, which is set on the development machine and not in CI — so the tests passed locally and failed in CI. The run was checked while still in progress and never re-checked. Fixed with an autouse fixture that sets a placeholder root (fusion never opens the files). Reproduced first by running the suite with the variable unset — the same 2 failures as CI — then 43/43 pass with it unset. Lesson: run the suite once with the machine-specific environment removed before trusting a local pass.
+
+### 2026-10-21b — analyses pre-registered before any new data are touched
+
+`docs/PREREGISTRATION.md`, committed alone as `baa892f` (2026-10-21 23:23 +0530), before the Nasrabadi data are downloaded and before the held-out test split is used. Confirmatory family, Bonferroni alpha = 0.0167, positive only if p < 0.0167 **and** the 95% CI lower bound exceeds 0.5:
+- **H1a** replication — the 100 task-recording features, standardised L2 logistic regression (C = 1, nothing tuned), subject-wise 5-fold CV within Nasrabadi;
+- **H1b** transfer — the same model trained on the 85 Rohani development subjects with VCPT, features standardised within each dataset, applied once to Nasrabadi;
+- **H3** Riemannian tangent-space features (EC + EO covariances) on the 84-subject development cohort — pre-specified but not blind.
+
+**H2**, the post-hoc 0.627 model trained on all 91 development subjects and applied once to the 17-subject test split, is an estimate only: at n = 17 its CI spans about +/-0.25. It uses up the held-out split.
+
+The registration states what had already been seen, including that test-split feature values were looked at in diagnosis-unrelated checks. It is append-only; changes go under its "Deviations" heading. It lives only in git, which was rewritten once on this date, and is not on an immutable registry.
+
+- **Next:** (1) email the dataset author; (2) download the Nasrabadi data (IEEE DataPort login, by the author); (3) implement H1a/H1b/H3/H2 exactly as registered.
