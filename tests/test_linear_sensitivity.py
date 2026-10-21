@@ -15,10 +15,21 @@ Run:  py -m pytest tests/test_linear_sensitivity.py
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from training.linear_sensitivity import CNN_OOF, FEATURES, run_variant
 
 MANIFEST = "data_pipeline/splits/subject_splits.csv"
+
+
+@pytest.fixture(autouse=True)
+def _placeholder_data_root(monkeypatch, tmp_path):
+    """run_fusion_cv loads the manifest through load_manifest(), which resolves
+    its relative EDF paths against ADHD_YOLO_DATA_ROOT and exits if it is unset.
+    Fusion never opens those files -- it reads only `split` and `group` -- so any
+    directory will do. Without this the tests passed only on a machine where the
+    variable happened to be set, and CI was red from 2026-10-16 to 2026-10-21."""
+    monkeypatch.setenv("ADHD_YOLO_DATA_ROOT", str(tmp_path))
 
 
 def _run(standardise, use_cnn):
