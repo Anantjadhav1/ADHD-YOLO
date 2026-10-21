@@ -1075,3 +1075,19 @@ Three readings worth keeping:
 3. **Probabilities are uncalibrated across folds.** At 0.5, sensitivity/specificity run from 0.31/0.94 (fold 0) to 0.87/0.27 (fold 2); the ranking is consistent, the operating point is not. Expected with a frozen backbone and a per-fold linear head; irrelevant to AUC, relevant to anyone reading the dashboard's "classed as" line.
 
 **In progress:** the same control on topomaps. Its pipeline differs from the scalogram's only in image generation, so it tests the one CNN component not yet covered.
+
+### 2026-10-21 — topomap passes its positive control; commit attribution removed
+
+**Topomap, Rest (EO) vs Task, 79 children:** pooled AUC **0.747**, CI [0.693, 0.804], within-child permutation p = 0.0002, task above own rest in 68/79 (86%); folds 0.789, 0.862, 0.720, 0.782, 0.785. The first attempt (2026-10-16) was killed mid fold 2 by the session ending — no traceback, folds 0–1 complete — and was rerun from scratch, since `run_cv` does not resume.
+
+All three arms are now validated on the same contrast:
+
+| Rest (EO) vs Task | classical | CNN scalogram | CNN topomap |
+|---|---|---|---|
+| pooled AUC | 0.686 | 0.633 | 0.747 |
+| 95% CI | [0.637, 0.741] | [0.582, 0.686] | [0.693, 0.804] |
+| ADHD vs Control, same code | 0.538 (91) / 0.556 (84) | 0.522 | 0.523 |
+
+**Every arm finds a difference that exists; none finds ADHD.** The ordering is informative: the topomap draws all 19 channels including Fp1/Fp2 and temporal sites, the scalogram five central channels with no frontopolar ones. The control with the most access to the task-related muscle signal scores highest, so 0.747 should not be read as topomaps capturing more physiology. The training curves repeat the ADHD run's shape — training loss falls throughout (0.64 → 0.14 in fold 4) while inner-fold accuracy peaks by epoch 2 — and early stopping ends folds at 6–7 epochs.
+
+**Commit attribution.** The 12 commits of 2026-10-16 carried a `Co-Authored-By: Claude` trailer. At the author's request they were rewritten to remove it (`git filter-branch --msg-filter`, trailer line only; files verified identical to the pre-rewrite tree, author and dates unchanged) and force-pushed after temporarily allowing force pushes on `main`. All 12 hashes changed; no document in the repo cited them. Any clone made before 2026-10-21 should be re-cloned rather than pulled.

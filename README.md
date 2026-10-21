@@ -307,6 +307,18 @@ EO vs VCPT is the primary control: both eyes-open, both labelled by which file a
 
 Image encoding, fold assembly, Ultralytics' class indexing and epoch-to-subject aggregation all work: **the CNN's null on ADHD is about the data too.** These images were built at 40 epochs per condition against the ADHD run's 300, which should make the control harder, not easier. The scalogram carries only Fz, Cz, Pz, F3 and F4, so this separation cannot rest on the frontopolar muscle signal that helped the classical control, though F3/F4 still see some. Thresholded at 0.5, sensitivity and specificity swing between folds (0.31/0.94 to 0.87/0.27) — the probabilities are not calibrated across folds, which the AUC is indifferent to.
 
+**The topomap arm passes as well, and most strongly.** Same construction, same 79 children, topomap images:
+
+| Rest (EO) vs Task | classical | CNN scalogram | CNN topomap |
+|---|---|---|---|
+| pooled AUC | 0.686 | 0.633 | **0.747** |
+| 95% CI | [0.637, 0.741] | [0.582, 0.686] | [0.693, 0.804] |
+| permutation p | 0.0002 | 0.0002 | 0.0002 |
+| task above own rest | 68/85 (80%) | 64/79 (81%) | 68/79 (86%) |
+| same code, ADHD vs Control | 0.538 (91) / 0.556 (84) | 0.522 | 0.523 |
+
+Every arm separates rest from task; none separates ADHD from Control. The topomap scoring highest has a plain reading: it draws all 19 channels, including Fp1/Fp2 and the temporal sites where the classical control found the task-related muscle rise, whereas the scalogram carries five central channels. So the strongest control is also the one with the most access to artifact — consistent with everything else here, and a reason not to read 0.747 as "topomaps capture more physiology". Its training curve shows the same shape as the ADHD run's: training loss keeps falling while the inner fold peaks within the first few epochs, and early stopping ends each fold at 6–7 epochs.
+
 ### What this establishes, and what it does not
 
 **Establishes:** on 84 subjects, neither a transfer-learned CNN on EEG-derived
@@ -314,7 +326,7 @@ images nor an SVM on 551 engineered features discriminates ADHD from Control.
 Two image representations, two capacity settings, and three feature families
 spanning spectral power, aperiodic activity and connectivity. The code is not the
 reason: the identical training code separates rest from task in the same children
-(classical AUC 0.686, CNN scalogram AUC 0.633, both p = 0.0002).
+(classical AUC 0.686, CNN scalogram 0.633, CNN topomap 0.747, all p = 0.0002).
 
 **Does not establish:** that EEG carries no signal, that a different
 architecture would fail, or that this holds at n=500. It is a bounded negative
@@ -335,7 +347,7 @@ the gap between this project's classical arm (on the 84-subject cohort: AUC
 Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the two things that could still change the result, and at the product.
 
 1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August. Rohani et al. used 826 features including P300 and behavioural measures, which need the trigger coding. This is the only route where a large, legitimate jump is plausible.
-2. **Positive controls: done** (2026-10-16). Rest (EO) vs Task through each arm's own unmodified training code: classical AUC 0.686, CNN scalogram 0.633, both p = 0.0002. Both nulls on ADHD are about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
+2. **Positive controls: done** (2026-10-16). Rest (EO) vs Task through each arm's own unmodified training code: classical AUC 0.686, CNN scalogram 0.633, CNN topomap 0.747, all p = 0.0002. Every arm's null on ADHD is about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
 3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
 4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
 5. **Web:** public deployment. *(Per-upload quality-control report and PDF export: done 2026-10-16.)*
