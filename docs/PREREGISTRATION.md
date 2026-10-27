@@ -105,3 +105,16 @@ Completes D1 items 2–4, whose bracketed placeholders were committed unfilled i
    - The peak-to-peak threshold for the Nasrabadi data is set to the value at which the median per-subject rejection rate, over all 121 subjects, equals that of the Rohani task recording: **18.26%** (median `rej_vcpt` in `docs/qc_audit.csv`). It is computed once, on post-ICA epochs, before any feature is computed, and its value is appended here before H1a or H1b is run.
    - No unit conversion beyond that is applied. The H1a/H1b features are ratios (relative power, TBR, IAF, asymmetry) or are standardised within each dataset (H1b), so a constant gain does not reach the models. The aperiodic offset, the one scale-dependent feature, shifts only by a constant, which within-dataset standardisation removes.
    - The Rohani pipeline and its 250 µV threshold are unchanged.
+
+### D3 — 2026-10-28, before any feature is computed: the threshold value
+
+Output of `py -m data_pipeline.nasrabadi threshold` (code at `ea13c57`), computed from the 121 cleaned recordings (all 121 cleaned without failure). The stage reads only the cleaned files, never the manifest or the folder names, so it cannot depend on diagnosis.
+
+| | |
+|---|---|
+| peak-to-peak threshold | **1683.7 nominal µV** (0.0016836815 V) |
+| target median rejection | 18.26% |
+| achieved median rejection | **17.89%** |
+| subjects / epochs | 121 / 11,230 |
+
+The achieved rate sits just below the target because rejection changes in steps; the rule takes the smallest threshold whose median rate does not exceed the target. The threshold is 6.7× Rohani et al.'s 250 µV, in line with the amplitude difference measured in D2.3. No feature had been computed and no model run when this was recorded.
