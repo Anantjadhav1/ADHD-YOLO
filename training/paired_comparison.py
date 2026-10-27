@@ -39,10 +39,14 @@ WHAT IT REPORTS
       each other. Two chance-level models that disagree completely are a
       different situation from two that agree on the same wrong answers.
 
-    python -m training.paired_comparison \\
+    py -m training.paired_comparison \\
         --arm CNN_scalogram runs/frozen/scalogram_oof_cnn_probs.csv \\
         --arm CNN_topomap runs/frozen_topomap/topomap_oof_cnn_probs.csv \\
-        --arm Classical runs/classical/classical_oof_probs.csv
+        --arm Classical runs/classical_v3/classical_oof_probs.csv
+
+  This is the command that produced docs/paired_comparison.csv: "Classical" is
+  the 551-feature arm (runs/classical_v3). Until 2026-10-28 this example named
+  runs/classical, the 301-feature arm, which does not reproduce that file.
 """
 
 import argparse
