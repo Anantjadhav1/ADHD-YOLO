@@ -88,3 +88,20 @@ Recorded after inspecting only file structure, documentation and storage types �
 3. **Units and storage.** 32 files are stored as float64 and 89 as int16. Storage type is balanced across groups (float64: ADHD 16/61, Control 16/60), so it cannot stand in for diagnosis. Units per the dataset documentation: [FILL: e.g. µV, and whether int16 and float64 files share a scale]. All data are converted to float and to volts before preprocessing, so the 250 µV and 0.1 µV thresholds apply as registered.
 4. **File-name suffix.** 49 files end in "p" (ADHD 29/61, Control 20/60). The documentation gives no meaning for it; it is ignored, and the subject ID is the file stem.
 5. **Labels.** Diagnosis is taken from the top-level folder name (ADHD_part1/2, Control_part1/2): 61 ADHD, 60 Control.
+
+### D2 — 2026-10-27, before any analysis: sampling rate, units and the rejection threshold
+
+Completes D1 items 2–4, whose bracketed placeholders were committed unfilled in `231705b`. They are completed here rather than edited, per the append-only rule.
+
+1. **Sampling rate: 128 Hz**, per the dataset's public IEEE DataPort page. The page lists the channels by their older names (T3, T4, T5, T6), which confirms the renaming in D1.
+2. **Units: not stated** — not on the page and not in the dataset folder (`Channel_Labels.docx` holds only the channel list; the `.ced` file only electrode positions). The "p" suffix is not explained anywhere.
+3. **Group-blind checks**, made to settle what the documentation does not. Diagnosis labels were not read in any of them; results were summarised by storage type or over all 121 files.
+   - Every float64 file holds only integer values, and its amplitude matches the int16 files (median per-file MAD of raw data 106 vs 110). The two storage types are the same data at the same scale.
+   - No file shows samples piling up at its maximum value: no clipping.
+   - After a 1–40 Hz filter the typical per-file standard deviation is about 117 units (p10–p90: 96–151), several times typical EEG expressed in µV.
+   - Before ICA, the registered 250 µV peak-to-peak rule would reject 100% of epochs in all 121 files. The median worst-channel peak-to-peak per epoch is 1,127 units, against 260 µV for Rohani et al. before ICA.
+4. **Consequence and decision.** Applied literally, the registered threshold leaves no data, so every subject would be excluded under §4. Since the units are unknown, the threshold is matched by behaviour rather than by number, using a rule fixed now and computed without labels:
+   - Data are treated as nominal µV for the conversion to volts (×1e-6), as D1 states. The pipeline runs unchanged otherwise: filters, ICA, 1.5 s epochs, and the 0.1 µV flat rule.
+   - The peak-to-peak threshold for the Nasrabadi data is set to the value at which the median per-subject rejection rate, over all 121 subjects, equals that of the Rohani task recording: **18.26%** (median `rej_vcpt` in `docs/qc_audit.csv`). It is computed once, on post-ICA epochs, before any feature is computed, and its value is appended here before H1a or H1b is run.
+   - No unit conversion beyond that is applied. The H1a/H1b features are ratios (relative power, TBR, IAF, asymmetry) or are standardised within each dataset (H1b), so a constant gain does not reach the models. The aperiodic offset, the one scale-dependent feature, shifts only by a constant, which within-dataset standardisation removes.
+   - The Rohani pipeline and its 250 µV threshold are unchanged.
