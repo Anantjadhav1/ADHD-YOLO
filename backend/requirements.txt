@@ -37,6 +37,8 @@ ultralytics==8.3.253
 torch==2.13.0
 torchvision==0.28.0
 xgboost==3.2.0
+# Pre-registered H3 (docs/PREREGISTRATION.md): Riemannian tangent-space features.
+pyriemann==0.12
 
 # Backend API
 fastapi==0.141.1
