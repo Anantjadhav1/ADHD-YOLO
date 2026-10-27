@@ -352,7 +352,9 @@ Registered in `docs/PREREGISTRATION.md` (`baa892f`) before the Nasrabadi data we
 | **H1a** replication, 5-fold CV within Nasrabadi (121) | **0.637** | [0.533, 0.734] | 0.0026 | **positive** |
 | **H1b** transfer, trained on Rohani (85), applied to Nasrabadi (121) | 0.432 | [0.328, 0.534] | 0.904 | negative |
 | **H2** post-hoc linear model on the Rohani held-out split (17) | 0.514 | [0.214, 0.808] | — | estimate only |
-| **H3** Riemannian features, Rohani development folds | — | — | — | pending |
+| **H3** Riemannian tangent-space features, Rohani development folds (84) | 0.566 | [0.440, 0.688] | 0.149 | negative |
+
+**The confirmatory family is complete: one positive (H1a), two negative (H1b, H3).** H3 is a different kind of representation altogether — spatial covariance structure rather than spectral power — and on the Rohani cohort it lands where every other method did (0.52–0.57). The absence of a Rohani signal is not the weakness of one method; it holds across power spectra, images, connectivity and covariance geometry.
 
 **Within the Nasrabadi cohort, task-EEG spectral features separate ADHD from Control modestly but clearly** — the project's first positive result, and a pre-registered one. **The same kind of model trained on Rohani et al. does not transfer** (AUC 0.432, not distinguishable from 0.5): whatever separates the groups in one cohort is not a marker shared with the other. The post-hoc 0.627 on Rohani is not supported on its untouched held-out split (0.514), though at n = 17 it cannot be ruled out either.
 

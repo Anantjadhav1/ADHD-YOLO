@@ -1124,3 +1124,22 @@ What H1a does not establish: that the signal is ADHD physiology. Task, equipment
 H3 remains: confirmatory family of three, so its alpha stays 0.0167 regardless of H1a.
 
 - **Next:** (1) H3 — Riemannian features on the Rohani development folds (needs `pyriemann` and covariance matrices from re-processed recordings); (2) email the dataset author.
+
+### 2026-10-28b — H3 negative; the pre-registered family is complete
+
+Code committed before running (`49645c3`). Covariances for all 84 CNN-cohort subjects, none excluded (EC epochs per subject ≥ 43, EO ≥ 72); matrices positive definite after OAS shrinkage, condition numbers ~4×10⁵ as expected after ICA removes components.
+
+**H3: AUC 0.566, 95% CI [0.440, 0.688], p = 0.149 — negative.** Remember the caveat it was registered with: pre-specified, but on development data already analysed many times.
+
+| | AUC | 95% CI | p | decision |
+|---|---|---|---|---|
+| H1a within Nasrabadi | 0.637 | [0.533, 0.734] | 0.0026 | **positive** |
+| H1b Rohani → Nasrabadi | 0.432 | [0.328, 0.534] | 0.904 | negative |
+| H3 Riemannian, Rohani | 0.566 | [0.440, 0.688] | 0.149 | negative |
+| H2 post-hoc model, Rohani test split | 0.514 | [0.214, 0.808] | — | estimate only |
+
+**Conclusion of the pre-registered phase.** A modest ADHD/Control difference exists inside the Nasrabadi cohort and was found with a model fixed in advance. It does not transfer to Rohani et al., and on Rohani et al. no method finds one — four representations now (spectral power, time-frequency images, scalp maps, covariance geometry), every interval containing 0.5. The defensible statement is that the signal is cohort-specific; this project found no EEG marker of ADHD that holds across cohorts.
+
+The held-out split is now spent (H2). Any further analysis of either dataset is exploratory and must be labelled so.
+
+- **Next:** (1) the paper — methods draft exists, results now complete; (2) email the dataset author (P300 and behaviour remain the one untested source of signal in Rohani et al.).
