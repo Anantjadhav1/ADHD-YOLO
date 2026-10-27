@@ -1,6 +1,6 @@
 # Methods — working draft
 
-**Status.** Drafted 2026-10-16 from `PROGRESS.md`, `README.md`, `PROJECT.md` and the code itself. Every parameter below was read from the code, not from memory or the logs; where the record is incomplete the text says **[verify]**. Citations still need checking against primary sources before submission. This is a scaffold for the thesis chapter, not finished prose.
+**Status.** Drafted 2026-10-16 from `PROGRESS.md`, `README.md`, `PROJECT.md` and the code itself. Every parameter below was read from the code, not from memory or the logs; where the record is incomplete the text says **[verify]**. Citations still need checking against primary sources before submission. This is a scaffold for the thesis chapter, not finished prose. Updated 2026-10-28 with the pre-registered phase (§9b).
 
 ---
 
@@ -27,7 +27,7 @@ All partitioning is at the subject level; no epoch, image or feature from one ch
 - The remaining 91 subjects form **five stratified development folds**.
 - One manifest records each subject's split; every downstream script reads it rather than re-deriving splits. Fold assembly and the out-of-fold table both assert that no subject crosses a boundary.
 
-**The held-out test split was never used for a one-shot evaluation.** `evaluate_on_test()` exists, but no run is recorded; the split was later used only to build the reference distribution shown by the demonstration interface (scored by a checkpoint that neither trained nor selected on it). All results below are development-fold cross-validation.
+**During the analyses of §§3–9 the held-out test split was never used for a one-shot evaluation.** `evaluate_on_test()` exists, but no run is recorded; the split was used only to build the reference distribution shown by the demonstration interface (scored by a checkpoint that neither trained nor selected on it). All results in §§3–9 are development-fold cross-validation. The split was then used exactly once, on 2026-10-28, for the pre-registered estimate H2 (§9b), and is now spent.
 
 ## 3. Preprocessing (`data_pipeline/preprocessing.py`)
 
@@ -87,7 +87,7 @@ Spectral features are computed from 1.5 s epochs, which bounds frequency resolut
 
 ## 7b. Post-hoc sensitivity analysis — exploratory (`training/linear_sensitivity.py`)
 
-Specified after the results above were known, so reported separately and not in the main table. Re-fitting fusion with standardised inputs raised the pooled AUC from 0.537 to 0.626; the same standardised logistic regression *without* the CNN probability gave 0.627 (95% CI 0.504–0.745, unadjusted permutation p = 0.024). The change is attributable to the model class — a linear model on all 551 standardised features rather than an RBF SVM on ≤80 selected ones — not to fusion. State: post hoc; at least eight prior analyses of the same subjects; uncorrected p; fold AUCs 0.347–0.764; largest weights on eyes-open coherence and temporal/occipital gamma. Not confirmable on the 17-subject held-out split (CI ≈ ±0.25).
+Specified after the results above were known, so reported separately and not in the main table. Re-fitting fusion with standardised inputs raised the pooled AUC from 0.537 to 0.626; the same standardised logistic regression *without* the CNN probability gave 0.627 (95% CI 0.504–0.745, unadjusted permutation p = 0.024). The change is attributable to the model class — a linear model on all 551 standardised features rather than an RBF SVM on ≤80 selected ones — not to fusion. State: post hoc; at least eight prior analyses of the same subjects; uncorrected p; fold AUCs 0.347–0.764; largest weights on eyes-open coherence and temporal/occipital gamma. It was later applied once to the 17-subject held-out split as the pre-registered estimate H2 (§9b): AUC 0.514 (95% CI 0.214–0.808), an interval too wide to confirm or refute 0.627.
 
 ## 8. Positive control (`training/positive_control.py`)
 
@@ -99,9 +99,39 @@ The CNN arm's positive control (`training/positive_control_cnn.py`) uses the sam
 
 Per subject: rejection rate per condition, whether the ICA muscle cap fired and how many components muscle detection flagged, and EC/EO ambiguity — recorded in `build_log.csv` and returned per upload by the `/predict` endpoint. No include/exclude rule was applied: **flagged subjects are included in every analysis**. Across all 108 subjects the muscle cap fired for 27, 65 lost more than 30% of epochs in at least one condition (eyes-closed median 31%; 90th percentiles EC 63%, EO 45%, VCPT 45%), and 78 were flagged on at least one ground; flag rates did not differ by group (cap: Fisher p = 0.39). As a sensitivity analysis, four exclusion policies were applied to the fixed out-of-fold predictions (`training/qc_sensitivity.py`; 84 → 52 subjects): every arm's 95% CI contained 0.5 under every policy, so the conclusion does not depend on the QC decision. Before 2026-10-16 the recorded `capped` flag was computed after the topography veto and was false for all 108 subjects; the cap warnings in the logs were correct throughout, and no exclude list or result depended on the flag.
 
+## 9b. Pre-registered analyses (`docs/PREREGISTRATION.md`)
+
+After the analyses above, four further analyses were registered on 2026-10-21 as a commit in the public repository (`baa892f`), before the second dataset was downloaded. The registration is append-only. Three deviations (D1–D3) were appended before any feature was computed, each stating so. The analysis code was committed before each run (`5821c78`, `49645c3`). State that a git commit is weaker than an immutable registry (OSF, AsPredicted): this repository's history was rewritten once, on 2026-10-21, to remove an attribution line, though not after the registration.
+
+**Second dataset.** Nasrabadi et al., IEEE DataPort **[verify full citation]**: 121 children (61 ADHD, 60 Control), 19 channels, one task recording each **[verify age range and task description against the dataset page]**. Neither the sampling rate nor the units are stored in the files. The sampling rate, 128 Hz, is taken from the dataset page. Four channels carry 10-10 names (T7, T8, P7, P8) and were mapped to the identical 10-20 sites T3, T4, T5, T6 (D1). Diagnosis is taken from the folder name.
+
+**Preprocessing.** The pipeline of §3 is unchanged except for one parameter. The amplitude units are undocumented. Group-blind checks found amplitudes several times those of µV EEG (median worst-channel peak-to-peak before ICA: 1,127 units, against 260 µV for Rohani et al.), so the 250 µV rule would have rejected every epoch (D2). The threshold was therefore matched by behaviour rather than by number: it is the value at which the median per-subject rejection rate equals that of the Rohani task recording (18.26%), found by binary search over the cleaned recordings without access to labels. That value is 1,683.7 nominal units, which achieves 17.89% (D3). All 121 subjects yielded features (11,230 epochs), so none was excluded. The 100 task-recording features of §5 were computed. These features are ratios or are standardised within each dataset, so the unknown gain does not reach the models; the aperiodic offset shifts by a constant that standardisation removes.
+
+**Analyses.** H1a, H1b and H2 use median imputation → standardisation → L2 logistic regression (C = 1, `max_iter` 1000); H3 uses standardisation → the same logistic regression. No hyperparameter is tuned.
+- **H1a — within Nasrabadi:** subject-wise stratified 5-fold cross-validation (seed 42) over all 121 subjects.
+- **H1b — transfer:** trained on the 85 Rohani development subjects with a VCPT recording, then applied once to all 121 Nasrabadi subjects. Features are standardised within each dataset separately, which uses no labels.
+- **H3 — Riemannian tangent space, Rohani 84-subject cohort.** This one is secondary: the development folds were not blind. For each subject and condition (EC, EO), one OAS-shrunk covariance of the 19 channels is computed over all surviving epochs (µV). It is projected to the tangent space at the Riemannian mean of the training folds (`pyriemann`). EC and EO vectors are concatenated (2 × 190 = 380 features). The existing five development folds are used, each scored by a model trained on the other four.
+- **H2 — estimate only:** the post-hoc model of §7b, trained once on all 91 development subjects and applied once to the 17-subject test split.
+
+**Decision rule.** Statistics as in §7. Bonferroni correction over {H1a, H1b, H3} gives α = 0.05/3 ≈ 0.0167. A result is positive only if p < α and the 95% CI lower bound is above 0.5. H2 enters no test.
+
+| | n (ADHD) | AUC | 95% CI | p | accuracy | decision |
+|---|---|---|---|---|---|---|
+| H1a within Nasrabadi | 121 (61) | 0.637 | 0.533–0.734 | 0.0026 | 0.612 | **positive** |
+| H1b Rohani → Nasrabadi | 121 (61) | 0.432 | 0.328–0.534 | 0.904 | 0.405 | negative |
+| H3 Riemannian, Rohani | 84 (42) | 0.566 | 0.440–0.688 | 0.149 | 0.524 | negative |
+| H2 post-hoc model, test split | 17 (8) | 0.514 | 0.214–0.808 | — | 0.471 | estimate only |
+
+**To state with the results:**
+- H1a establishes a group difference within one cohort, not an ADHD marker. Task, site, amplifier, protocol and residual artifact all differ between the cohorts and cannot be separated here.
+- H1b's interval contains 0.5: the Rohani-trained weights do not carry over, and this is not evidence of a reversed effect.
+- H3 adds a fourth representation (covariance geometry) to the three already null on Rohani et al.
+- H2 can neither confirm nor refute the post-hoc 0.627.
+- Every later analysis of either dataset is exploratory.
+
 ## 10. Software
 
-Python 3.13; MNE 1.12.1; NumPy 2.4.4; SciPy 1.17.1; scikit-learn 1.8.0; PyWavelets 1.9.0; mne-connectivity 0.8.1; Ultralytics 8.3.253; PyTorch 2.13 (CPU, local). The CNN development runs were made on Google Colab GPUs **[verify the library versions used there]**. `backend/requirements.txt` pins the local versions.
+Python 3.13; MNE 1.12.1; NumPy 2.4.4; SciPy 1.17.1; scikit-learn 1.8.0; PyWavelets 1.9.0; mne-connectivity 0.8.1; Ultralytics 8.3.253; PyTorch 2.13 (CPU, local); pyriemann 0.12 (§9b only). The CNN development runs were made on Google Colab GPUs **[verify the library versions used there]**. `backend/requirements.txt` pins the local versions.
 
 ## 11. Limitations to state
 
@@ -113,5 +143,6 @@ Python 3.13; MNE 1.12.1; NumPy 2.4.4; SciPy 1.17.1; scikit-learn 1.8.0; PyWavele
 6. 1.5 s epochs limit spectral resolution (TBR, IAF).
 7. No QC-based exclusion; flagged recordings are included.
 8. Fusion features unstandardised (standardising changes the result — §7b); stacking leak.
-9. The held-out test split was never evaluated one-shot.
+9. The held-out test split was evaluated once, for the pre-registered estimate H2 (§9b); at n = 17 its interval spans about ±0.3, so it confirms nothing.
 10. n = 84 gives 95% CIs of roughly ±0.13 AUC; the study can exclude large effects, not small ones.
+11. Nasrabadi et al.'s amplitude units are undocumented; the rejection threshold was matched by rejection rate (§9b, D2–D3). Pre-registration was a git commit, not an immutable registry.
