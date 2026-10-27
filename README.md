@@ -343,18 +343,21 @@ the gap between this project's classical arm (on the 84-subject cohort: AUC
 0.556, accuracy 0.571) and Rohani et al.'s 75.8% accuracy.
 
 ## What's next
+## Pre-registered results (2026-10-28)
 
-Phase 2 is closed and the pipeline runs end to end. What remains is aimed at the two things that could still change the result, and at the product.
+Registered in `docs/PREREGISTRATION.md` (`baa892f`) before the Nasrabadi data were downloaded; threshold fixed in D3 (`ac7fa4b`) and analysis code committed (`5821c78`) before either was run. Decision rule: positive only if one-sided permutation p < 0.0167 **and** the 95% CI lower bound > 0.5.
 
-1. **Email the dataset author about VCPT trigger coding.** Outstanding since mid-August. Rohani et al. used 826 features including P300 and behavioural measures, which need the trigger coding. This is the only route where a large, legitimate jump is plausible.
-2. **Positive controls: done** (2026-10-16). Rest (EO) vs Task through each arm's own unmodified training code: classical AUC 0.686, CNN scalogram 0.633, CNN topomap 0.747, all p = 0.0002. Every arm's null on ADHD is about the data, not the code. *Not* EC vs EO: 64 of 108 EC/EO boundaries were located using alpha power, so that task is circular.
-3. **EEG-native architectures:** EEGNet, ShallowConvNet and Deep4Net via `braindecode`, on raw epochs instead of ImageNet transfer.
-4. **A second public dataset and cross-dataset validation:** Nasrabadi et al. (IEEE DataPort, 61 ADHD / 60 Control, already named in `PROJECT.md` §3). Train on one cohort, test on the other.
-5. **Web:** public deployment. *(Per-upload quality-control report and PDF export: done 2026-10-16.)*
-6. **Pre-registered next analyses** (`docs/PREREGISTRATION.md`, 2026-10-21): replication and transfer on the Nasrabadi cohort, a Riemannian representation, and a one-shot estimate on the held-out split — fixed before the new data are seen.
-7. **Paper.** A methods scaffold, every parameter read from the code and gaps marked **[verify]**, is in `docs/METHODS_DRAFT.md`.
+| | AUC | 95% CI | p | decision |
+|---|---|---|---|---|
+| **H1a** replication, 5-fold CV within Nasrabadi (121) | **0.637** | [0.533, 0.734] | 0.0026 | **positive** |
+| **H1b** transfer, trained on Rohani (85), applied to Nasrabadi (121) | 0.432 | [0.328, 0.534] | 0.904 | negative |
+| **H2** post-hoc linear model on the Rohani held-out split (17) | 0.514 | [0.214, 0.808] | — | estimate only |
+| **H3** Riemannian features, Rohani development folds | — | — | — | pending |
 
----
+**Within the Nasrabadi cohort, task-EEG spectral features separate ADHD from Control modestly but clearly** — the project's first positive result, and a pre-registered one. **The same kind of model trained on Rohani et al. does not transfer** (AUC 0.432, not distinguishable from 0.5): whatever separates the groups in one cohort is not a marker shared with the other. The post-hoc 0.627 on Rohani is not supported on its untouched held-out split (0.514), though at n = 17 it cannot be ruled out either.
+
+Read together: a signal can exist inside one dataset without generalising to another. The two cohorts differ in task (Go/NoGo vs. counting cartoon characters), equipment and site, and the public documentation does not rule out differences in how the two Nasrabadi groups were recorded. The positive controls showed that arousal and muscle artifact separate conditions readily. So H1a establishes discrimination *within that cohort*; it does not establish an EEG marker of ADHD.
+
 
 ## Repo layout
 

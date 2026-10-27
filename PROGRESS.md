@@ -1106,3 +1106,21 @@ All three arms are now validated on the same contrast:
 The registration states what had already been seen, including that test-split feature values were looked at in diagnosis-unrelated checks. It is append-only; changes go under its "Deviations" heading. It lives only in git, which was rewritten once on this date, and is not on an immutable registry.
 
 - **Next:** (1) email the dataset author; (2) download the Nasrabadi data (IEEE DataPort login, by the author); (3) implement H1a/H1b/H3/H2 exactly as registered.
+
+### 2026-10-28 — pre-registered results: H1a positive, H1b negative, H2 uninformative
+
+Sequence, each step committed before the next: D1 file format (`231705b`), D2 units and a label-free threshold rule (`2360299`), loader (`ea13c57`), D3 threshold 1683.7 nominal µV at 17.89% median rejection (`ac7fa4b`), analysis code (`5821c78`), then one run. All 121 Nasrabadi recordings cleaned and featurised; none excluded.
+
+| | AUC | 95% CI | p | decision |
+|---|---|---|---|---|
+| H1a within Nasrabadi, 5-fold CV | 0.637 | [0.533, 0.734] | 0.0026 | positive |
+| H1b Rohani (85) → Nasrabadi (121) | 0.432 | [0.328, 0.534] | 0.904 | negative |
+| H2 post-hoc model, Rohani test split (17) | 0.514 | [0.214, 0.808] | — | estimate only |
+
+**H1a is the first positive result in this project and it was fixed in advance.** H1b says it is not a shared marker: a model trained on Rohani et al. scores below 0.5 on Nasrabadi, so the feature–diagnosis relationships differ between the cohorts. H2 gives the post-hoc 0.627 no support on untouched data.
+
+What H1a does not establish: that the signal is ADHD physiology. Task, equipment and site differ between the cohorts; the public documentation does not say whether the two Nasrabadi groups were recorded under the same conditions; and this project's positive controls showed how readily arousal and artifact separate conditions. Any follow-up on *which* features carry H1a is exploratory and must be labelled so.
+
+H3 remains: confirmatory family of three, so its alpha stays 0.0167 regardless of H1a.
+
+- **Next:** (1) H3 — Riemannian features on the Rohani development folds (needs `pyriemann` and covariance matrices from re-processed recordings); (2) email the dataset author.
