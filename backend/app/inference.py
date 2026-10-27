@@ -41,6 +41,17 @@ def _image_to_base64(img_array: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+# Signal traces sent to the dashboard are decimated to about this rate. Display
+# only: the data are already low-passed at 50 Hz, so 125 Hz draws them without
+# aliasing, and a few seconds of 19 channels stays a small JSON payload.
+DISPLAY_RATE_HZ = 125
+
+
+def _trace_uv(x: np.ndarray, sfreq: float) -> list:
+    step = max(1, int(round(sfreq / DISPLAY_RATE_HZ)))
+    return np.round(x[..., ::step] * 1e6, 2).tolist()   # volts -> microvolts
+
+
 def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dict:
     """
     Runs one subject's raw EDF file(s) through the full pipeline: preprocess
@@ -88,12 +99,21 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
     # topomap per condition. Display only -- nothing here enters the prediction.
     shown_per_task = 4
     epoch_tasks = []
-    images = {"scalograms": [], "topomaps": []}
+    images = {"scalograms": [], "topomaps": [], "scalogram_channels": list(SCALOGRAM_CHANNELS)}
+    signal = {}
     for task in ["EC", "EO"]:
         epochs = epochs_by_task[task]
         ch_names = epochs.ch_names
         sfreq = epochs.info["sfreq"]
         data = epochs.get_data()
+        scalogram_rows = [ch_names.index(ch) for ch in SCALOGRAM_CHANNELS if ch in ch_names]
+        # The first few cleaned epochs of all 19 channels, for the signal viewer.
+        # Epochs are joined end to end; rejected ones in between are not shown.
+        if len(data):
+            n_view = min(4, len(data))
+            signal[task] = {"channels": list(ch_names), "n_epochs": n_view,
+                            "rate_hz": sfreq / max(1, int(round(sfreq / DISPLAY_RATE_HZ))),
+                            "uv": _trace_uv(np.concatenate(list(data[:n_view]), axis=-1), sfreq)}
         n_use = min(len(data), max_epochs_per_task)
         picked = np.linspace(0, len(data) - 1, num=n_use, dtype=int)
         shown = set(picked[np.linspace(0, len(picked) - 1,
@@ -111,6 +131,7 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
             if i in shown:
                 images["scalograms"].append({"task": task, "epoch": int(i),
                                              "p_adhd": probs_adhd[-1],
+                                             "signal_uv": _trace_uv(data[i][scalogram_rows], sfreq),
                                              "png_base64": _image_to_base64(img)})
         if len(data):
             mid = len(data) // 2
@@ -145,6 +166,7 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
         "n_epochs_analyzed": len(probs_adhd),
         "epoch_probabilities": [{"task": t, "p_adhd": p} for t, p in zip(epoch_tasks, probs_adhd)],
         "images": images,
+        "signal": signal,
         "classical_biomarkers": classical,
         "quality_control": quality_control(result, len(probs_adhd)),
         "gradcam_overlay_png_base64": _image_to_base64(gc_result["overlay"]),
