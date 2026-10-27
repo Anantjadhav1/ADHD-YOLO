@@ -384,10 +384,75 @@ function HeadMap({ values, size = 440, rays = false, labels = true, pulse = fals
 
 /* =========================================================== 1. upload */
 
-// An illustration for the landing page only: a smooth posterior-weighted pattern, not data.
-const ILLUSTRATION = Object.fromEntries(Object.entries(POS).map(([k, [x, y]]) => [
-  k, 0.35 + Math.exp(-((y + 0.75) ** 2) / 0.22) + 0.35 * Math.exp(-((x - 0.25) ** 2 + (y - 0.25) ** 2) / 0.12),
-]));
+function mulberry32(seed) {
+  let a = seed;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Landing-page artwork, decorative only: concentric wave rings built from integer
+// harmonics (so each closes on itself), turning slowly in alternate directions.
+const ORB_RINGS = Array.from({ length: 16 }, (_, i) => {
+  const rnd = mulberry32(11 + i * 7);
+  const R = 0.34 + i * 0.043;
+  const comps = [[1, 3], [0.55, 7], [0.25, 13], [0.1, 23]].map(([a, f]) => ({ a, f: f + Math.floor(rnd() * 3), ph: rnd() * Math.PI * 2 }));
+  const amp = 0.006 + i * 0.0011;
+  const at = (t) => R + amp * comps.reduce((s, c) => s + c.a * Math.sin(c.f * t + c.ph), 0);
+  let d = "";
+  for (let k = 0; k <= 360; k += 1) {
+    const t = (k / 360) * 2 * Math.PI, r = at(t);
+    d += `${k ? "L" : "M"}${(r * Math.cos(t)).toFixed(4)} ${(r * Math.sin(t)).toFixed(4)}`;
+  }
+  const t0 = rnd() * 2 * Math.PI;
+  return { d: `${d}Z`, dot: [at(t0) * Math.cos(t0), at(t0) * Math.sin(t0)] };
+});
+
+function NeuralOrb({ size = 540 }) {
+  return (
+    <div className="relative mx-auto" style={{ width: size, height: size }} aria-hidden="true">
+      <svg viewBox="-1.5 -1.5 3 3" className="spin-very-slow absolute inset-0">
+        {Array.from({ length: 144 }, (_, i) => {
+          const a = (i / 144) * 2 * Math.PI, r1 = 1.2, r2 = r1 + (i % 6 === 0 ? 0.13 : 0.06);
+          return <line key={i} x1={r1 * Math.cos(a)} y1={r1 * Math.sin(a)} x2={r2 * Math.cos(a)} y2={r2 * Math.sin(a)}
+                       stroke="#c4b5fd" strokeOpacity={i % 6 === 0 ? 0.45 : 0.18} strokeWidth="0.008" />;
+        })}
+        <circle r="1.42" fill="none" stroke="#c4b5fd" strokeOpacity="0.08" strokeWidth="0.006" />
+      </svg>
+      <div className="absolute inset-[20%] rounded-full bg-[radial-gradient(closest-side,rgba(167,139,250,0.5),rgba(91,33,182,0.22)_55%,transparent)] blur-2xl" />
+      <svg viewBox="-1.5 -1.5 3 3" className="absolute inset-0">
+        <defs>
+          <radialGradient id="orbCore">
+            <stop offset="0" stopColor="#fdf4ff" stopOpacity="0.95" />
+            <stop offset="0.35" stopColor="#e879f9" stopOpacity="0.55" />
+            <stop offset="0.7" stopColor="#7c3aed" stopOpacity="0.18" />
+            <stop offset="1" stopColor="#7c3aed" stopOpacity="0" />
+          </radialGradient>
+          <filter id="orbGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="0.014" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        <circle r="0.42" fill="url(#orbCore)">
+          <animate attributeName="r" values="0.4;0.46;0.4" dur="6s" repeatCount="indefinite" />
+        </circle>
+        {ORB_RINGS.map(({ d, dot }, i) => (
+          <g key={i}>
+            {/* SMIL rotates about the user-space origin, the orb's centre, in every browser */}
+            <animateTransform attributeName="transform" type="rotate" from={i % 2 ? "360 0 0" : "0 0 0"} to={i % 2 ? "0 0 0" : "360 0 0"}
+                              dur={`${46 + i * 7}s`} repeatCount="indefinite" />
+            <path d={d} fill="none" stroke={`hsl(${258 + i * 4} 92% ${68 + i * 1.2}%)`}
+                  strokeOpacity={0.24 + 0.6 * Math.sin((Math.PI * (i + 1)) / 17)} strokeWidth={i % 4 === 0 ? 0.009 : 0.005}
+                  filter={i % 4 === 0 ? "url(#orbGlow)" : undefined} />
+            {i % 5 === 2 && <circle cx={dot[0]} cy={dot[1]} r="0.018" fill="#fdf4ff" filter="url(#orbGlow)" />}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
 
 function UploadStage({ files, setFiles, onRun, online, h1a, reference, onStudy }) {
   const drop = useRef(null);
@@ -396,7 +461,7 @@ function UploadStage({ files, setFiles, onRun, online, h1a, reference, onStudy }
       <section className="relative pt-4">
         <div className="relative h-[560px]">
           <div className="fade-up absolute left-1/2 top-0 -translate-x-1/2">
-            <HeadMap values={ILLUSTRATION} size={540} rays pulse labels={false} />
+            <NeuralOrb size={540} />
           </div>
 
           {h1a && (
