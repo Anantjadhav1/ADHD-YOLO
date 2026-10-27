@@ -77,4 +77,14 @@ These are exploratory if done, and are reported as such:
 
 ## Deviations
 
-*None yet. Append below; do not edit the text above.*
+*Append below; do not edit the text above.*
+
+### D1 — 2026-10-27, before any analysis: how the Nasrabadi files are read
+
+Recorded after inspecting only file structure, documentation and storage types — no signal values, plots or statistics — and before any feature was computed.
+
+1. **Channel names.** The files use 10-10 names for four sites: T7, T8, P7, P8. These are the same electrodes as this pipeline's T3, T4, T5, T6, and are renamed accordingly (T7→T3, T8→T4, P7→T5, P8→T6). They are therefore *not* treated as absent, and no feature is dropped on that account. Column order is taken from `Channel_Labels.docx`: Fp1 Fp2 F3 F4 C3 C4 P3 P4 O1 O2 F7 F8 T7 T8 P7 P8 Fz Cz Pz.
+2. **Sampling rate.** Not stored in the files. Taken from the dataset documentation: [FILL: e.g. 128 Hz].
+3. **Units and storage.** 32 files are stored as float64 and 89 as int16. Storage type is balanced across groups (float64: ADHD 16/61, Control 16/60), so it cannot stand in for diagnosis. Units per the dataset documentation: [FILL: e.g. µV, and whether int16 and float64 files share a scale]. All data are converted to float and to volts before preprocessing, so the 250 µV and 0.1 µV thresholds apply as registered.
+4. **File-name suffix.** 49 files end in "p" (ADHD 29/61, Control 20/60). The documentation gives no meaning for it; it is ignored, and the subject ID is the file stem.
+5. **Labels.** Diagnosis is taken from the top-level folder name (ADHD_part1/2, Control_part1/2): 61 ADHD, 60 Control.
