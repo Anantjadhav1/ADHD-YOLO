@@ -2,6 +2,9 @@
 data/
 *.edf
 *.mat
+# Nasrabadi et al. dataset (IEEE DataPort). Its .docx and .ced files are not
+# covered by *.mat, and the data must not be redistributed through this repo.
+nasrawadi/
 models/*.pt
 models/*.pth
 # Ultralytics downloads pretrained weights into the CWD on first use, so they
