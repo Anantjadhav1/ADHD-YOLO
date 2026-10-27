@@ -439,7 +439,7 @@ cd D:\adhd-yolo
 py -m uvicorn backend.app.main:app --port 8000 --reload
 ```
 
-Then open `frontend\index.html` in a browser and upload an EOEC `.edf`. `http://127.0.0.1:8000/docs` lists the endpoints.
+Then open `http://localhost:8000/app/` — the presentation dashboard (React; build it once with `npm install` and `npm run build` in `frontend/app`, see `frontend/README.md`) — or the original `frontend\index.html`, and upload an EOEC `.edf`. `http://127.0.0.1:8000/docs` lists the endpoints. The presentation dashboard walks through four steps: upload, the generated scalograms / topomaps / Grad-CAM, the prediction with biomarkers, quality and the reference strip, and the pre-registered study, all served live by the backend.
 
 - **Demo only on held-out test subjects** (listed as `test` in `data_pipeline/splits/subject_splits.csv`). This checkpoint trained on folds 2–4 and selected its epoch on fold 1; test subjects are unseen by every model in the project. Its own held-out AUC on fold 0 was 0.486.
 - **Leave VCPT empty for a fast demo.** The CNN uses EC/EO only; a VCPT upload adds a second ICA pass and changes only the biomarker table, not the prediction. `F12070157` (ADHD, the worked example) is a clean test recording. Avoid `C12031144` as a showcase: it is fast only because it has no VCPT, and it is one of the worst recordings in the cohort (85.8% of EC and 72.6% of EO epochs rejected, muscle cap hit). If it is uploaded, the dashboard now says so above the scale.

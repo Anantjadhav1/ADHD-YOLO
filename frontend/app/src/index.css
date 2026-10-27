@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+body {
+  background: #f6f8fb;
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.fade-up { animation: fade-up 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+/* Skeleton tiles while the backend works: a soft light sweep, nothing flashing. */
+@keyframes sweep { 100% { transform: translateX(100%); } }
+.skeleton { position: relative; overflow: hidden; background: #edf1f6; }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.75), transparent);
+  animation: sweep 1.5s infinite;
+}
+
+/* Indeterminate progress: the backend reports no progress, so the bar does not pretend to. */
+@keyframes slide { 0% { left: -40%; } 100% { left: 100%; } }
+.indeterminate { position: relative; overflow: hidden; }
+.indeterminate::before {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 40%; border-radius: 9999px;
+  background: #2563eb; animation: slide 1.4s ease-in-out infinite;
+}

@@ -22,7 +22,9 @@ import numpy as np
 from PIL import Image
 
 from training.classical_features import compute_classical_features
-from data_pipeline.image_conversion import generate_scalogram_image, SCALOGRAM_CHANNELS
+from data_pipeline.image_conversion import (
+    generate_scalogram_image, generate_topomap_image, SCALOGRAM_CHANNELS,
+)
 from data_pipeline.preprocessing import preprocess_subject
 from backend.app.quality import quality_control
 from interpretability.gradcam import GradCAM
@@ -81,13 +83,22 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
     # recording (not the first N) stops one drowsy or restless stretch from
     # dominating the average.
     max_epochs_per_task = 30
+    # What the dashboard shows of the images: a few of the scalograms the model
+    # actually classified (evenly spaced, not the "best looking"), and one
+    # topomap per condition. Display only -- nothing here enters the prediction.
+    shown_per_task = 4
+    epoch_tasks = []
+    images = {"scalograms": [], "topomaps": []}
     for task in ["EC", "EO"]:
         epochs = epochs_by_task[task]
         ch_names = epochs.ch_names
         sfreq = epochs.info["sfreq"]
         data = epochs.get_data()
         n_use = min(len(data), max_epochs_per_task)
-        for i in np.linspace(0, len(data) - 1, num=n_use, dtype=int):
+        picked = np.linspace(0, len(data) - 1, num=n_use, dtype=int)
+        shown = set(picked[np.linspace(0, len(picked) - 1,
+                                       num=min(shown_per_task, len(picked)), dtype=int)])
+        for i in picked:
             img = generate_scalogram_image(data[i], ch_names, sfreq)
             tmp_path = os.path.join(tmp_dir, f"_infer_{task}_{i}.png")
             Image.fromarray(img).save(tmp_path)
@@ -95,7 +106,17 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
             names = pred.names
             adhd_idx = [k for k, v in names.items() if v == "ADHD"][0]
             probs_adhd.append(float(pred.probs.data[adhd_idx]))
+            epoch_tasks.append(task)
             last_image_path = tmp_path  # keep the most recent for Grad-CAM below
+            if i in shown:
+                images["scalograms"].append({"task": task, "epoch": int(i),
+                                             "p_adhd": probs_adhd[-1],
+                                             "png_base64": _image_to_base64(img)})
+        if len(data):
+            mid = len(data) // 2
+            images["topomaps"].append({"task": task, "epoch": int(mid),
+                                       "png_base64": _image_to_base64(
+                                           generate_topomap_image(data[mid], epochs.info))})
 
     if not probs_adhd:
         raise ValueError("No epochs were generated from the provided EEG file -- check the recording length/quality.")
@@ -120,7 +141,10 @@ def run_inference(eoec_path: str, vcpt_path: str | None, model_path: str) -> dic
     return {
         "predicted_class": predicted_class,
         "confidence": mean_prob_adhd if predicted_class == "ADHD" else 1 - mean_prob_adhd,
+        "p_adhd": mean_prob_adhd,
         "n_epochs_analyzed": len(probs_adhd),
+        "epoch_probabilities": [{"task": t, "p_adhd": p} for t, p in zip(epoch_tasks, probs_adhd)],
+        "images": images,
         "classical_biomarkers": classical,
         "quality_control": quality_control(result, len(probs_adhd)),
         "gradcam_overlay_png_base64": _image_to_base64(gc_result["overlay"]),
